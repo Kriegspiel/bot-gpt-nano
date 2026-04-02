@@ -243,6 +243,10 @@ def action_schema() -> dict[str, Any]:
     }
 
 
+def openai_enabled() -> bool:
+    return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+
+
 def call_openai(prompt: str) -> dict[str, Any]:
     api_key = os.environ["OPENAI_API_KEY"].strip()
     model = os.environ.get("OPENAI_MODEL", "gpt-5-nano").strip()
@@ -351,6 +355,9 @@ def fallback_decision(state: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def choose_action(state: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    if not openai_enabled():
+        return fallback_decision(state), "fallback_no_openai_key"
+
     try:
         prompt = build_prompt(state)
         raw_response = call_openai(prompt)
@@ -412,8 +419,8 @@ def main() -> None:
 
     if not os.environ.get("KRIEGSPIEL_BOT_TOKEN"):
         raise SystemExit("KRIEGSPIEL_BOT_TOKEN is missing. Run with --register first.")
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise SystemExit("OPENAI_API_KEY is missing.")
+    if not openai_enabled():
+        print("OPENAI_API_KEY is missing; running in fallback mode.", file=sys.stderr, flush=True)
 
     run_loop(args.poll_seconds)
 
