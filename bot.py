@@ -90,7 +90,7 @@ def register_bot() -> None:
             "owner_email": os.environ.get("KRIEGSPIEL_BOT_OWNER_EMAIL", "bot-gpt-nano@kriegspiel.org"),
             "description": os.environ.get(
                 "KRIEGSPIEL_BOT_DESCRIPTION",
-                "Model-driven Kriegspiel bot that chooses moves from its private board state and scoresheet.",
+                "Model-driven Kriegspiel bot that chooses moves using GPT nano model.",
             ),
             "listed": True,
         },
