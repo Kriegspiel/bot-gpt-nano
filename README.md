@@ -7,6 +7,7 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - registers as a listed Kriegspiel bot
 - polls assigned games from the live API
 - can keep one open human-joinable lobby game advertised when under its active-game cap
+- can join another bot's waiting lobby game with 10% probability while still under its active-game cap
 - builds a prompt from the current rule variant, private FEN, legal actions, and private scoresheet
 - asks an OpenAI model for the next action in strict JSON
 - validates the model output against the server-provided legal actions
@@ -37,6 +38,14 @@ but only while it has fewer than 5 active games. That behavior is controlled wit
 - `KRIEGSPIEL_AUTO_CREATE_RULE_VARIANT=berkeley|berkeley_any`
 - `KRIEGSPIEL_AUTO_CREATE_PLAY_AS=white|black|random`
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=5`
+
+Bot-vs-bot play is also enabled by default:
+
+- the bot checks open waiting games
+- it will only consider games created by another bot
+- it will try to join one with 10% probability on a poll cycle
+- it uses the same 5-active-game cap for intentional bot-vs-bot joins
+- it keeps a local one-minute cooldown between bot-vs-bot join attempts to match backend rules
 
 ## Test
 

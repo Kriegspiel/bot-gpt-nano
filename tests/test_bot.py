@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 import bot
 
@@ -44,6 +45,48 @@ class BotTests(unittest.TestCase):
     def test_should_not_create_lobby_game_when_active_cap_is_reached(self) -> None:
         games = [{"state": "active"} for _ in range(5)]
         self.assertFalse(bot.should_create_lobby_game(games))
+
+    def test_open_bot_lobby_candidates_only_include_other_bot_waiting_games(self) -> None:
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano"}):
+            candidates = bot.open_bot_lobby_candidates(
+                [
+                    {
+                        "game_code": "BOT123",
+                        "created_by": "randobot",
+                    },
+                    {
+                        "game_code": "SELF12",
+                        "created_by": "gptnano",
+                    },
+                    {
+                        "game_code": "HUM123",
+                        "created_by": "fil",
+                    },
+                ],
+                profile_lookup=lambda username: {"role": "bot" if username == "randobot" else "user"},
+            )
+
+        self.assertEqual([game["game_code"] for game in candidates], ["BOT123"])
+
+    def test_choose_bot_game_to_join_respects_probability(self) -> None:
+        games = [{"game_code": "BOT123", "created_by": "randobot"}]
+
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano"}):
+            with mock.patch.object(bot.random, "random", return_value=0.9):
+                self.assertIsNone(bot.choose_bot_game_to_join(games, rng=bot.random))
+            with mock.patch.object(bot.random, "random", return_value=0.05):
+                with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
+                    with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
+                        self.assertEqual(bot.choose_bot_game_to_join(games, rng=bot.random)["game_code"], "BOT123")
+
+    def test_should_not_join_bot_lobby_game_when_active_cap_reached(self) -> None:
+        games = [{"state": "active"} for _ in range(5)]
+        self.assertFalse(bot.should_join_bot_lobby_game(games))
+
+    def test_has_own_waiting_game_detects_existing_lobby(self) -> None:
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano"}):
+            self.assertTrue(bot.has_own_waiting_game([{"game_code": "ABC123", "created_by": "gptnano"}]))
+            self.assertFalse(bot.has_own_waiting_game([{"game_code": "XYZ789", "created_by": "randobot"}]))
 
 
 if __name__ == "__main__":
