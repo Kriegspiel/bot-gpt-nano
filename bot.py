@@ -29,6 +29,7 @@ ENV_PATH = BASE_DIR / ".env"
 CONTENT_DIR = BASE_DIR.parent / "content" / "rules"
 DEFAULT_TIMEOUT_SECONDS = 20
 ACTION_SCHEMA_NAME = "kriegspiel_next_action"
+DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE = 5
 
 
 def load_env_file(path: str | Path = ENV_PATH) -> None:
@@ -117,6 +118,53 @@ def post_json(path: str, payload: dict[str, Any] | None = None) -> dict[str, Any
     )
     response.raise_for_status()
     return response.json()
+
+
+def auto_create_enabled() -> bool:
+    raw = os.environ.get("KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def max_active_games_before_create() -> int:
+    raw = os.environ.get("KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE", str(DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE)).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE
+
+
+def create_payload() -> dict[str, str]:
+    return {
+        "rule_variant": os.environ.get("KRIEGSPIEL_AUTO_CREATE_RULE_VARIANT", "berkeley_any").strip() or "berkeley_any",
+        "play_as": os.environ.get("KRIEGSPIEL_AUTO_CREATE_PLAY_AS", "random").strip() or "random",
+        "time_control": "rapid",
+        "opponent_type": "human",
+    }
+
+
+def active_games(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [game for game in games if game.get("state") == "active"]
+
+
+def waiting_games(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [game for game in games if game.get("state") == "waiting"]
+
+
+def should_create_lobby_game(games: list[dict[str, Any]]) -> bool:
+    if not auto_create_enabled():
+        return False
+    if waiting_games(games):
+        return False
+    return len(active_games(games)) < max_active_games_before_create()
+
+
+def maybe_create_lobby_game(games: list[dict[str, Any]]) -> bool:
+    if not should_create_lobby_game(games):
+        return False
+
+    created = post_json("/api/game/create", create_payload())
+    print(f"created lobby game {created['game_id']} ({created['game_code']})")
+    return True
 
 
 def strip_frontmatter(text: str) -> str:
@@ -396,9 +444,10 @@ def run_loop(poll_seconds: float) -> None:
     while True:
         try:
             mine = get_json("/api/game/mine")
-            for game in mine.get("games", []):
-                if game.get("state") == "active":
-                    maybe_play_game(game["game_id"])
+            games = mine.get("games", [])
+            maybe_create_lobby_game(games)
+            for game in active_games(games):
+                maybe_play_game(game["game_id"])
         except requests.RequestException as exc:
             print(f"poll failed: {exc}", file=sys.stderr, flush=True)
         time.sleep(poll_seconds)

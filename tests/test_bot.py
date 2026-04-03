@@ -33,6 +33,18 @@ class BotTests(unittest.TestCase):
         decision = bot.fallback_decision(state)
         self.assertEqual(decision, {"action": "move", "uci": "e2e4"})
 
+    def test_should_create_lobby_game_when_under_cap_and_no_waiting_game(self) -> None:
+        games = [{"state": "active"}, {"state": "active"}]
+        self.assertTrue(bot.should_create_lobby_game(games))
+
+    def test_should_not_create_lobby_game_when_waiting_game_exists(self) -> None:
+        games = [{"state": "active"}, {"state": "waiting"}]
+        self.assertFalse(bot.should_create_lobby_game(games))
+
+    def test_should_not_create_lobby_game_when_active_cap_is_reached(self) -> None:
+        games = [{"state": "active"} for _ in range(5)]
+        self.assertFalse(bot.should_create_lobby_game(games))
+
 
 if __name__ == "__main__":
     unittest.main()
