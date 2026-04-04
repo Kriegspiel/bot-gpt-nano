@@ -67,12 +67,34 @@ class BotTests(unittest.TestCase):
             "scoresheet": {"viewer_color": "white", "turns": []},
         }
         system_prompt = bot.build_system_prompt("berkeley_any")
-        user_prompt = bot.build_user_prompt(state, feedback=["Rejected move e2e4: Illegal move"], exclude_actions=[{"action": "move", "uci": "e2e4"}])
+        user_prompt = bot.build_initial_user_prompt(state)
+        followup_prompt = bot.build_followup_user_prompt(
+            state,
+            feedback=["Rejected move e2e4: Illegal move"],
+            exclude_actions=[{"action": "move", "uci": "e2e4"}],
+            recent_updates=["Turn 3 black: Illegal move"],
+        )
         self.assertIn("Rules and setting", system_prompt)
         self.assertIn("\"private_board_fen\":\"fen\"", user_prompt)
-        self.assertIn("Rejected move e2e4: Illegal move", user_prompt)
-        self.assertIn("e2e4", user_prompt)
-        self.assertIn("ordered from best to worse priority", user_prompt)
+        self.assertIn("\"phase\":\"initial_turn_snapshot\"", user_prompt)
+        self.assertIn("Rejected move e2e4: Illegal move", followup_prompt)
+        self.assertIn("Turn 3 black: Illegal move", followup_prompt)
+        self.assertIn("\"already_tried_this_turn\":[\"e2e4\"]", followup_prompt)
+        self.assertIn("ordered from best to worse priority", followup_prompt)
+
+    def test_new_recent_items_returns_only_suffix_delta(self) -> None:
+        previous = ["Turn 1 white: Move complete", "Turn 1 black: Illegal move"]
+        current = [
+            "Turn 1 white: Move complete",
+            "Turn 1 black: Illegal move",
+            "Turn 2 white: Has pawn captures",
+        ]
+        self.assertEqual(bot.new_recent_items(previous, current), ["Turn 2 white: Has pawn captures"])
+
+    def test_scoresheet_digest_changes_with_content(self) -> None:
+        digest_a = bot.scoresheet_digest({"viewer_color": "white", "turns": []})
+        digest_b = bot.scoresheet_digest({"viewer_color": "white", "turns": [{"turn": 1, "white": [], "black": []}]})
+        self.assertNotEqual(digest_a, digest_b)
 
     def test_summarize_scoresheet_turns_returns_lines(self) -> None:
         lines = bot.summarize_scoresheet_turns(
