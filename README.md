@@ -9,7 +9,7 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - can keep one open human-joinable lobby game advertised when under its active-game cap
 - can join another bot's waiting lobby game with 10% probability while still under its active-game cap
 - builds a prompt from the current rule variant, private FEN, legal actions, and private scoresheet
-- asks an OpenAI model for the next action in strict JSON
+- asks an OpenAI model for the top ranked next actions in strict JSON
 - validates the model output against the server-provided legal actions
 - falls back safely if the model response is invalid or the API call fails
 
@@ -47,6 +47,17 @@ Bot-vs-bot play is also enabled by default:
 - it will try to join one with 10% probability on a poll cycle
 - it uses the same 5-active-game cap for intentional bot-vs-bot joins
 - it keeps a local one-minute cooldown between bot-vs-bot join attempts to match backend rules
+
+OpenAI prompting defaults:
+
+- system prompt carries the rules and overall Kriegspiel scene
+- user prompt carries private scoresheet history, recent referee items, legal actions, and retry feedback
+- the bot asks for the top 10 ranked candidate actions by default
+- if a batch fails, it asks the model for the next batch of candidates
+- defaults can be tuned with:
+  - `OPENAI_MODEL=gpt-5.4-nano`
+  - `OPENAI_MODEL_BATCH_SIZE=10`
+  - `OPENAI_MAX_BATCHES_PER_TURN=5`
 
 ## Test
 

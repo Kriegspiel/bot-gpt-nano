@@ -33,6 +33,8 @@ ACTION_SCHEMA_NAME = "kriegspiel_next_action"
 DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE = 5
 BOT_JOIN_COOLDOWN_SECONDS = 60
 BOT_GAME_PICK_PROBABILITY = 0.1
+DEFAULT_MODEL_BATCH_SIZE = 10
+DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
@@ -367,24 +369,69 @@ def normalize_scoresheet_entry(entry: Any) -> str:
     return text or prompt
 
 
-def build_prompt(state: dict[str, Any]) -> str:
+def model_batch_size() -> int:
+    raw = os.environ.get("OPENAI_MODEL_BATCH_SIZE", str(DEFAULT_MODEL_BATCH_SIZE)).strip()
+    try:
+        return max(1, min(20, int(raw)))
+    except ValueError:
+        return DEFAULT_MODEL_BATCH_SIZE
+
+
+def max_model_batches_per_turn() -> int:
+    raw = os.environ.get("OPENAI_MAX_BATCHES_PER_TURN", str(DEFAULT_MAX_MODEL_BATCHES_PER_TURN)).strip()
+    try:
+        return max(1, min(20, int(raw)))
+    except ValueError:
+        return DEFAULT_MAX_MODEL_BATCHES_PER_TURN
+
+
+def extract_recent_referee_items(scoresheet: dict[str, Any], *, limit: int = 8) -> list[str]:
+    turns = scoresheet.get("turns") if isinstance(scoresheet.get("turns"), list) else []
+    lines: list[str] = []
+    for turn in turns[-limit:]:
+        turn_number = turn.get("turn")
+        for color in ("white", "black"):
+            entries = turn.get(color) if isinstance(turn.get(color), list) else []
+            for entry in entries:
+                normalized = normalize_scoresheet_entry(entry)
+                if normalized:
+                    lines.append(f"Turn {turn_number} {color}: {normalized}")
+    return lines[-limit:]
+
+
+def build_system_prompt(rule_variant: str) -> str:
+    rules_text = load_rules_text(rule_variant)
+    return (
+        "You are a strong Kriegspiel player.\n"
+        "Use only the provided private information and legal actions.\n"
+        "Do not invent moves. Do not suggest illegal actions.\n"
+        "Prioritize moves that are strategically strong, tactically sound, and robust under uncertainty.\n"
+        "You are ranking candidate actions, not explaining the rules.\n\n"
+        "Rules and setting:\n"
+        f"Rule variant: {rule_variant}\n"
+        f"{rules_text}\n"
+    )
+
+
+def build_user_prompt(
+    state: dict[str, Any],
+    *,
+    feedback: list[str] | None = None,
+    exclude_actions: list[dict[str, Any]] | None = None,
+) -> str:
     rule_variant = state.get("rule_variant", "berkeley_any")
     scoresheet = state.get("scoresheet") if isinstance(state.get("scoresheet"), dict) else {}
     allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
     possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
     max_prompt_turns = int(os.environ.get("OPENAI_MAX_PROMPT_TURNS", "24"))
-
-    rules_text = load_rules_text(rule_variant)
     scoresheet_text = summarize_scoresheet_turns(scoresheet, max_turns=max_prompt_turns)
-
+    recent_referee = extract_recent_referee_items(scoresheet)
+    feedback = feedback or []
+    exclude_actions = exclude_actions or []
+    exclusion_lines = [json.dumps(item, sort_keys=True) for item in exclude_actions]
+    target_count = min(model_batch_size(), max(len(allowed_moves), 1 if "ask_any" in possible_actions else 0))
     return (
-        "You are a strong Kriegspiel player.\n"
-        "Choose the single best next action for the current player using only the private information below.\n"
-        "Do not invent moves. Use only the provided legal actions.\n"
-        "If you choose action=move, the uci value must be one of allowed_moves exactly.\n"
-        "If you choose action=ask_any, set uci to null.\n"
-        "Return valid JSON only.\n\n"
-        f"Rule variant: {rule_variant}\n"
+        "Current private state:\n"
         f"Your color: {state.get('your_color')}\n"
         f"Game state: {state.get('state')}\n"
         f"Turn: {state.get('turn')}\n"
@@ -392,10 +439,16 @@ def build_prompt(state: dict[str, Any]) -> str:
         f"Private board FEN: {state.get('your_fen')}\n"
         f"Possible actions: {json.dumps(possible_actions)}\n"
         f"Allowed moves: {json.dumps(allowed_moves)}\n\n"
-        "Private scoresheet:\n"
+        "Private scoresheet history:\n"
         f"{scoresheet_text}\n\n"
-        "Rules:\n"
-        f"{rules_text}\n"
+        "Most recent referee items:\n"
+        f"{json.dumps(recent_referee)}\n\n"
+        f"Feedback from prior attempts this turn: {json.dumps(feedback)}\n"
+        f"Already tried or rejected suggestions this turn: {json.dumps(exclusion_lines)}\n\n"
+        f"Return the top {target_count} candidate actions ranked best-first.\n"
+        "If action=move, uci must be one of allowed_moves exactly.\n"
+        "If action=ask_any, uci must be null.\n"
+        "Use unique candidates only. Return valid JSON only.\n"
     )
 
 
@@ -406,11 +459,23 @@ def action_schema() -> dict[str, Any]:
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "action": {"type": "string", "enum": ["move", "ask_any"]},
-                "uci": {"type": ["string", "null"]},
-                "reason": {"type": "string"},
+                "candidates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "action": {"type": "string", "enum": ["move", "ask_any"]},
+                            "uci": {"type": ["string", "null"]},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["action", "uci", "reason"],
+                    },
+                }
             },
-            "required": ["action", "uci", "reason"],
+            "required": ["candidates"],
         },
         "strict": True,
     }
@@ -420,9 +485,9 @@ def openai_enabled() -> bool:
     return bool(os.environ.get("OPENAI_API_KEY", "").strip())
 
 
-def call_openai(prompt: str) -> dict[str, Any]:
+def call_openai(prompt: Any) -> dict[str, Any]:
     api_key = os.environ["OPENAI_API_KEY"].strip()
-    model = os.environ.get("OPENAI_MODEL", "gpt-5-nano").strip()
+    model = os.environ.get("OPENAI_MODEL", "gpt-5.4-nano").strip()
     response = requests.post(
         f"{openai_base_url()}/responses",
         headers={
@@ -511,6 +576,24 @@ def normalize_decision(decision: dict[str, Any], state: dict[str, Any]) -> dict[
     return None
 
 
+def normalize_ranked_decisions(payload: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    normalized: list[dict[str, Any]] = []
+    seen: set[tuple[str, str | None]] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        decision = normalize_decision(candidate, state)
+        if decision is None:
+            continue
+        key = (decision["action"], decision["uci"])
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(decision)
+    return normalized
+
+
 def fallback_decision(state: dict[str, Any]) -> dict[str, Any] | None:
     allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
     possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
@@ -527,42 +610,89 @@ def fallback_decision(state: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def choose_action(state: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+def fallback_ranked_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
+    decision = fallback_decision(state)
+    return [decision] if decision is not None else []
+
+
+def choose_ranked_actions(
+    state: dict[str, Any],
+    *,
+    feedback: list[str] | None = None,
+    exclude_actions: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
     if not openai_enabled():
-        return fallback_decision(state), "fallback_no_openai_key"
+        return fallback_ranked_actions(state), "fallback_no_openai_key"
 
     try:
-        prompt = build_prompt(state)
+        prompt = [
+            {"role": "system", "content": build_system_prompt(state.get("rule_variant", "berkeley_any"))},
+            {"role": "user", "content": build_user_prompt(state, feedback=feedback, exclude_actions=exclude_actions)},
+        ]
         raw_response = call_openai(prompt)
-        decision = normalize_decision(parse_model_decision(raw_response), state)
-        if decision is not None:
-            return decision, "model"
+        decisions = normalize_ranked_decisions(parse_model_decision(raw_response), state)
+        if decisions:
+            return decisions, "model"
     except (KeyError, ValueError, json.JSONDecodeError, requests.RequestException) as exc:
         logger.warning("model selection failed: %s", exc)
 
-    return fallback_decision(state), "fallback"
+    return fallback_ranked_actions(state), "fallback"
+
+
+def format_action(decision: dict[str, Any]) -> str:
+    if decision["action"] == "ask_any":
+        return "ask_any"
+    return str(decision["uci"])
 
 
 def maybe_play_game(game_id: str) -> bool:
-    state = get_json(f"/api/game/{game_id}/state")
-    if state.get("state") != "active" or state.get("turn") != state.get("your_color"):
-        return False
     metadata = get_json(f"/api/game/{game_id}")
-    if isinstance(metadata.get("rule_variant"), str):
-        state["rule_variant"] = metadata["rule_variant"]
+    feedback: list[str] = []
+    tried_actions: list[dict[str, Any]] = []
+    acted = False
 
-    decision, source = choose_action(state)
-    if decision is None:
-        return False
+    for _batch in range(max_model_batches_per_turn()):
+        state = get_json(f"/api/game/{game_id}/state")
+        if state.get("state") != "active" or state.get("turn") != state.get("your_color"):
+            return acted
+        if isinstance(metadata.get("rule_variant"), str):
+            state["rule_variant"] = metadata["rule_variant"]
 
-    if decision["action"] == "move":
-        result = post_json(f"/api/game/{game_id}/move", {"uci": decision["uci"]})
-        logger.debug("%s: %s move %s -> %s", game_id, source, decision["uci"], result["announcement"])
-        return bool(result.get("move_done"))
+        decisions, source = choose_ranked_actions(state, feedback=feedback, exclude_actions=tried_actions)
+        if not decisions:
+            return acted
 
-    result = post_json(f"/api/game/{game_id}/ask-any")
-    logger.debug("%s: %s ask-any -> %s", game_id, source, result["announcement"])
-    return bool(result.get("move_done"))
+        batch_success = False
+        for decision in decisions:
+            tried_actions.append(decision)
+            if decision["action"] == "move":
+                result = post_json(f"/api/game/{game_id}/move", {"uci": decision["uci"]})
+                acted = acted or bool(result.get("move_done"))
+                logger.debug("%s: %s move %s -> %s", game_id, source, decision["uci"], result["announcement"])
+                if result.get("move_done"):
+                    feedback = [
+                        f"Move complete: {result.get('announcement')}",
+                        f"Opponent/new turn: {result.get('turn')}",
+                    ]
+                    tried_actions = []
+                    batch_success = True
+                    break
+                feedback.append(f"Rejected move {decision['uci']}: {result.get('announcement')}")
+                continue
+
+            result = post_json(f"/api/game/{game_id}/ask-any")
+            acted = acted or bool(result.get("move_done"))
+            logger.debug("%s: %s ask-any -> %s", game_id, source, result["announcement"])
+            feedback = [f"Ask-any result: {result.get('announcement')}"]
+            tried_actions = []
+            batch_success = True
+            break
+
+        if not batch_success:
+            feedback.append("Top-ranked batch failed; provide the next best legal candidates.")
+            continue
+
+    return acted
 
 
 def run_loop(poll_seconds: float) -> None:

@@ -7,6 +7,21 @@ import bot
 
 
 class BotTests(unittest.TestCase):
+    def test_normalize_ranked_decisions_filters_invalid_and_duplicates(self) -> None:
+        state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
+        decisions = bot.normalize_ranked_decisions(
+            {
+                "candidates": [
+                    {"action": "move", "uci": "E2E4", "reason": "center"},
+                    {"action": "move", "uci": "e2e4", "reason": "duplicate"},
+                    {"action": "move", "uci": "a2a4", "reason": "illegal"},
+                    {"action": "ask_any", "uci": None, "reason": "question"},
+                ]
+            },
+            state,
+        )
+        self.assertEqual(decisions, [{"action": "move", "uci": "e2e4"}, {"action": "ask_any", "uci": None}])
+
     def test_normalize_decision_accepts_legal_move(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
         decision = bot.normalize_decision({"action": "move", "uci": "E2E4"}, state)
@@ -23,16 +38,40 @@ class BotTests(unittest.TestCase):
         self.assertEqual(decision, {"action": "ask_any", "uci": None})
 
     def test_extract_response_text_reads_nested_output(self) -> None:
-        payload = {"output": [{"content": [{"text": "{\"action\":\"move\",\"uci\":\"e2e4\",\"reason\":\"center\"}"}]}]}
+        payload = {"output": [{"content": [{"text": "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\",\"reason\":\"center\"}]}"}]}]}
         self.assertEqual(
             bot.extract_response_text(payload),
-            "{\"action\":\"move\",\"uci\":\"e2e4\",\"reason\":\"center\"}",
+            "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\",\"reason\":\"center\"}]}",
         )
 
     def test_fallback_prefers_center_moves(self) -> None:
         state = {"possible_actions": ["move"], "allowed_moves": ["a2a3", "e2e4", "h2h3"]}
         decision = bot.fallback_decision(state)
         self.assertEqual(decision, {"action": "move", "uci": "e2e4"})
+
+    def test_fallback_ranked_actions_wraps_single_decision(self) -> None:
+        state = {"possible_actions": ["move"], "allowed_moves": ["a2a3", "e2e4"]}
+        decisions = bot.fallback_ranked_actions(state)
+        self.assertEqual(decisions, [{"action": "move", "uci": "e2e4"}])
+
+    def test_build_prompts_split_rules_and_state(self) -> None:
+        state = {
+            "rule_variant": "berkeley_any",
+            "your_color": "white",
+            "state": "active",
+            "turn": "white",
+            "move_number": 3,
+            "your_fen": "fen",
+            "possible_actions": ["move"],
+            "allowed_moves": ["e2e4"],
+            "scoresheet": {"viewer_color": "white", "turns": []},
+        }
+        system_prompt = bot.build_system_prompt("berkeley_any")
+        user_prompt = bot.build_user_prompt(state, feedback=["Rejected move e2e4: Illegal move"], exclude_actions=[{"action": "move", "uci": "e2e4"}])
+        self.assertIn("Rules and setting", system_prompt)
+        self.assertIn("Private board FEN: fen", user_prompt)
+        self.assertIn("Rejected move e2e4: Illegal move", user_prompt)
+        self.assertIn("e2e4", user_prompt)
 
     def test_should_create_lobby_game_when_under_cap_and_no_waiting_game(self) -> None:
         games = [{"state": "active"}, {"state": "active"}]
