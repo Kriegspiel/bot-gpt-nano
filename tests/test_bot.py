@@ -69,9 +69,21 @@ class BotTests(unittest.TestCase):
         system_prompt = bot.build_system_prompt("berkeley_any")
         user_prompt = bot.build_user_prompt(state, feedback=["Rejected move e2e4: Illegal move"], exclude_actions=[{"action": "move", "uci": "e2e4"}])
         self.assertIn("Rules and setting", system_prompt)
-        self.assertIn("Private board FEN: fen", user_prompt)
+        self.assertIn("\"private_board_fen\":\"fen\"", user_prompt)
         self.assertIn("Rejected move e2e4: Illegal move", user_prompt)
         self.assertIn("e2e4", user_prompt)
+        self.assertIn("ordered from best to worse priority", user_prompt)
+
+    def test_summarize_scoresheet_turns_returns_lines(self) -> None:
+        lines = bot.summarize_scoresheet_turns(
+            {
+                "viewer_color": "white",
+                "turns": [{"turn": 1, "white": [{"message": "Move attempt — Move complete"}], "black": []}],
+            },
+            max_turns=12,
+        )
+        self.assertTrue(isinstance(lines, list))
+        self.assertTrue(any("Move attempt" in line for line in lines))
 
     def test_should_create_lobby_game_when_under_cap_and_no_waiting_game(self) -> None:
         self.assertTrue(bot.should_create_lobby_game([]))
