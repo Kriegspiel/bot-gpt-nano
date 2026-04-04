@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import random
 import re
@@ -32,6 +33,10 @@ ACTION_SCHEMA_NAME = "kriegspiel_next_action"
 DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE = 5
 BOT_JOIN_COOLDOWN_SECONDS = 60
 BOT_GAME_PICK_PROBABILITY = 0.1
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def load_env_file(path: str | Path = ENV_PATH) -> None:
@@ -115,7 +120,7 @@ def register_bot() -> None:
     response.raise_for_status()
     payload = response.json()
     save_token(payload["api_token"])
-    print(json.dumps(payload, indent=2))
+    logger.debug("%s", json.dumps(payload, indent=2))
 
 
 def get_json(path: str) -> dict[str, Any]:
@@ -262,7 +267,7 @@ def maybe_join_bot_lobby_game(games: list[dict[str, Any]], *, rng: random.Random
 
     record_bot_join_attempt()
     joined = post_json(f"/api/game/join/{game_code.strip()}")
-    print(f"joined bot lobby game {joined['game_id']} ({joined['game_code']})")
+    logger.debug("joined bot lobby game %s (%s)", joined["game_id"], joined["game_code"])
     return True
 
 
@@ -283,7 +288,7 @@ def maybe_create_lobby_game(games: list[dict[str, Any]]) -> bool:
         return False
 
     created = post_json("/api/game/create", create_payload())
-    print(f"created lobby game {created['game_id']} ({created['game_code']})")
+    logger.debug("created lobby game %s (%s)", created["game_id"], created["game_code"])
     return True
 
 
@@ -533,7 +538,7 @@ def choose_action(state: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
         if decision is not None:
             return decision, "model"
     except (KeyError, ValueError, json.JSONDecodeError, requests.RequestException) as exc:
-        print(f"model selection failed: {exc}", file=sys.stderr, flush=True)
+        logger.warning("model selection failed: %s", exc)
 
     return fallback_decision(state), "fallback"
 
@@ -552,11 +557,11 @@ def maybe_play_game(game_id: str) -> bool:
 
     if decision["action"] == "move":
         result = post_json(f"/api/game/{game_id}/move", {"uci": decision["uci"]})
-        print(f"{game_id}: {source} move {decision['uci']} -> {result['announcement']}")
+        logger.debug("%s: %s move %s -> %s", game_id, source, decision["uci"], result["announcement"])
         return bool(result.get("move_done"))
 
     result = post_json(f"/api/game/{game_id}/ask-any")
-    print(f"{game_id}: {source} ask-any -> {result['announcement']}")
+    logger.debug("%s: %s ask-any -> %s", game_id, source, result["announcement"])
     return bool(result.get("move_done"))
 
 
@@ -570,7 +575,7 @@ def run_loop(poll_seconds: float) -> None:
             for game in active_games(games):
                 maybe_play_game(game["game_id"])
         except requests.RequestException as exc:
-            print(f"poll failed: {exc}", file=sys.stderr, flush=True)
+            logger.warning("poll failed: %s", exc)
         time.sleep(poll_seconds)
 
 
@@ -590,7 +595,7 @@ def main() -> None:
     if not os.environ.get("KRIEGSPIEL_BOT_TOKEN"):
         raise SystemExit("KRIEGSPIEL_BOT_TOKEN is missing. Run with --register first.")
     if not openai_enabled():
-        print("OPENAI_API_KEY is missing; running in fallback mode.", file=sys.stderr, flush=True)
+        logger.warning("OPENAI_API_KEY is missing; running in fallback mode.")
 
     run_loop(args.poll_seconds)
 
