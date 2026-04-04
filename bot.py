@@ -12,6 +12,7 @@ deterministic legal action so the service remains playable.
 from __future__ import annotations
 
 import argparse
+from functools import lru_cache
 import json
 import logging
 import os
@@ -310,6 +311,7 @@ def _variant_any_rule_excerpt() -> str:
     return "\n".join(lines)
 
 
+@lru_cache(maxsize=4)
 def load_rules_text(rule_variant: str) -> str:
     berkeley = strip_frontmatter((CONTENT_DIR / "berkeley.md").read_text())
     if rule_variant == "berkeley_any":
@@ -325,7 +327,7 @@ def load_rules_text(rule_variant: str) -> str:
     return berkeley
 
 
-def summarize_scoresheet_turns(scoresheet: dict[str, Any], *, max_turns: int) -> str:
+def summarize_scoresheet_turns(scoresheet: dict[str, Any], *, max_turns: int) -> list[str]:
     viewer_color = scoresheet.get("viewer_color", "unknown")
     turns = scoresheet.get("turns") if isinstance(scoresheet.get("turns"), list) else []
     recent_turns = turns[-max_turns:]
@@ -342,7 +344,7 @@ def summarize_scoresheet_turns(scoresheet: dict[str, Any], *, max_turns: int) ->
                 normalized = normalize_scoresheet_entry(entry)
                 if normalized:
                     lines.append(f"- {color}: {normalized}")
-    return "\n".join(lines)
+    return lines
 
 
 def normalize_scoresheet_entry(entry: Any) -> str:
@@ -405,8 +407,10 @@ def build_system_prompt(rule_variant: str) -> str:
         "You are a strong Kriegspiel player.\n"
         "Use only the provided private information and legal actions.\n"
         "Do not invent moves. Do not suggest illegal actions.\n"
-        "Prioritize moves that are strategically strong, tactically sound, and robust under uncertainty.\n"
-        "You are ranking candidate actions, not explaining the rules.\n\n"
+        "Return unique candidate actions ordered strictly from best to worse priority.\n"
+        "Candidate 1 must be your best choice, candidate 2 your next-best choice, and so on.\n"
+        "Prioritize strategically strong, tactically sound moves that are robust under uncertainty.\n"
+        "Do not explain the rules. Do not include prose outside the JSON schema.\n\n"
         "Rules and setting:\n"
         f"Rule variant: {rule_variant}\n"
         f"{rules_text}\n"
@@ -419,36 +423,36 @@ def build_user_prompt(
     feedback: list[str] | None = None,
     exclude_actions: list[dict[str, Any]] | None = None,
 ) -> str:
-    rule_variant = state.get("rule_variant", "berkeley_any")
     scoresheet = state.get("scoresheet") if isinstance(state.get("scoresheet"), dict) else {}
     allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
     possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
-    max_prompt_turns = int(os.environ.get("OPENAI_MAX_PROMPT_TURNS", "24"))
+    max_prompt_turns = int(os.environ.get("OPENAI_MAX_PROMPT_TURNS", "12"))
     scoresheet_text = summarize_scoresheet_turns(scoresheet, max_turns=max_prompt_turns)
-    recent_referee = extract_recent_referee_items(scoresheet)
-    feedback = feedback or []
+    recent_referee = extract_recent_referee_items(scoresheet, limit=6)
+    feedback = (feedback or [])[-4:]
     exclude_actions = exclude_actions or []
-    exclusion_lines = [json.dumps(item, sort_keys=True) for item in exclude_actions]
+    exclusion_lines = [format_action(item) for item in exclude_actions[-12:]]
     target_count = min(model_batch_size(), max(len(allowed_moves), 1 if "ask_any" in possible_actions else 0))
+    payload = {
+        "your_color": state.get("your_color"),
+        "game_state": state.get("state"),
+        "turn": state.get("turn"),
+        "move_number": state.get("move_number"),
+        "private_board_fen": state.get("your_fen"),
+        "possible_actions": possible_actions,
+        "allowed_moves": allowed_moves,
+        "recent_scoresheet_lines": scoresheet_text[-12:],
+        "recent_referee_items": recent_referee,
+        "feedback_this_turn": feedback,
+        "already_tried_this_turn": exclusion_lines,
+        "target_count": target_count,
+    }
     return (
-        "Current private state:\n"
-        f"Your color: {state.get('your_color')}\n"
-        f"Game state: {state.get('state')}\n"
-        f"Turn: {state.get('turn')}\n"
-        f"Move number: {state.get('move_number')}\n"
-        f"Private board FEN: {state.get('your_fen')}\n"
-        f"Possible actions: {json.dumps(possible_actions)}\n"
-        f"Allowed moves: {json.dumps(allowed_moves)}\n\n"
-        "Private scoresheet history:\n"
-        f"{scoresheet_text}\n\n"
-        "Most recent referee items:\n"
-        f"{json.dumps(recent_referee)}\n\n"
-        f"Feedback from prior attempts this turn: {json.dumps(feedback)}\n"
-        f"Already tried or rejected suggestions this turn: {json.dumps(exclusion_lines)}\n\n"
-        f"Return the top {target_count} candidate actions ranked best-first.\n"
+        "Current private state JSON follows.\n"
+        "Return exactly target_count unique candidates when possible, ordered from best to worse priority.\n"
         "If action=move, uci must be one of allowed_moves exactly.\n"
-        "If action=ask_any, uci must be null.\n"
-        "Use unique candidates only. Return valid JSON only.\n"
+        "If action=ask_any, uci must be null.\n\n"
+        f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=True, sort_keys=True)}"
     )
 
 
