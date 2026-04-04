@@ -74,8 +74,8 @@ class BotTests(unittest.TestCase):
         self.assertIn("e2e4", user_prompt)
 
     def test_should_create_lobby_game_when_under_cap_and_no_waiting_game(self) -> None:
-        games = [{"state": "active"}, {"state": "active"}]
-        self.assertTrue(bot.should_create_lobby_game(games))
+        self.assertTrue(bot.should_create_lobby_game([]))
+        self.assertFalse(bot.should_create_lobby_game([{"state": "active"}]))
 
     def test_should_not_create_lobby_game_when_waiting_game_exists(self) -> None:
         games = [{"state": "active"}, {"state": "waiting"}]
