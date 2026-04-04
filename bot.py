@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 from functools import lru_cache
+import hashlib
 import json
 import logging
 import os
@@ -91,6 +92,35 @@ def save_state(state: dict[str, Any]) -> None:
 def save_token(token: str) -> None:
     state = load_state()
     state["token"] = token
+    save_state(state)
+
+
+def get_conversation_state(game_id: str) -> dict[str, Any]:
+    state = load_state()
+    conversations = state.get("conversations")
+    if not isinstance(conversations, dict):
+        return {}
+    conversation = conversations.get(game_id)
+    return conversation if isinstance(conversation, dict) else {}
+
+
+def save_conversation_state(game_id: str, conversation: dict[str, Any]) -> None:
+    state = load_state()
+    conversations = state.get("conversations")
+    if not isinstance(conversations, dict):
+        conversations = {}
+    conversations[game_id] = conversation
+    state["conversations"] = conversations
+    save_state(state)
+
+
+def clear_conversation_state(game_id: str) -> None:
+    state = load_state()
+    conversations = state.get("conversations")
+    if not isinstance(conversations, dict) or game_id not in conversations:
+        return
+    conversations.pop(game_id, None)
+    state["conversations"] = conversations
     save_state(state)
 
 
@@ -401,6 +431,34 @@ def extract_recent_referee_items(scoresheet: dict[str, Any], *, limit: int = 8) 
     return lines[-limit:]
 
 
+def scoresheet_digest(scoresheet: dict[str, Any]) -> str:
+    payload = json.dumps(scoresheet, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def turn_signature(state: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            str(state.get("state") or ""),
+            str(state.get("move_number") or ""),
+            str(state.get("turn") or ""),
+            str(state.get("your_color") or ""),
+        ]
+    )
+
+
+def new_recent_items(previous: list[str], current: list[str]) -> list[str]:
+    if not previous:
+        return current
+    best_overlap = 0
+    max_overlap = min(len(previous), len(current))
+    for size in range(max_overlap, 0, -1):
+        if previous[-size:] == current[:size]:
+            best_overlap = size
+            break
+    return current[best_overlap:]
+
+
 def build_system_prompt(rule_variant: str) -> str:
     rules_text = load_rules_text(rule_variant)
     return (
@@ -417,11 +475,8 @@ def build_system_prompt(rule_variant: str) -> str:
     )
 
 
-def build_user_prompt(
+def build_initial_user_prompt(
     state: dict[str, Any],
-    *,
-    feedback: list[str] | None = None,
-    exclude_actions: list[dict[str, Any]] | None = None,
 ) -> str:
     scoresheet = state.get("scoresheet") if isinstance(state.get("scoresheet"), dict) else {}
     allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
@@ -429,11 +484,9 @@ def build_user_prompt(
     max_prompt_turns = int(os.environ.get("OPENAI_MAX_PROMPT_TURNS", "12"))
     scoresheet_text = summarize_scoresheet_turns(scoresheet, max_turns=max_prompt_turns)
     recent_referee = extract_recent_referee_items(scoresheet, limit=6)
-    feedback = (feedback or [])[-4:]
-    exclude_actions = exclude_actions or []
-    exclusion_lines = [format_action(item) for item in exclude_actions[-12:]]
     target_count = min(model_batch_size(), max(len(allowed_moves), 1 if "ask_any" in possible_actions else 0))
     payload = {
+        "phase": "initial_turn_snapshot",
         "your_color": state.get("your_color"),
         "game_state": state.get("state"),
         "turn": state.get("turn"),
@@ -443,12 +496,41 @@ def build_user_prompt(
         "allowed_moves": allowed_moves,
         "recent_scoresheet_lines": scoresheet_text[-12:],
         "recent_referee_items": recent_referee,
-        "feedback_this_turn": feedback,
-        "already_tried_this_turn": exclusion_lines,
         "target_count": target_count,
     }
     return (
         "Current private state JSON follows.\n"
+        "Return exactly target_count unique candidates when possible, ordered from best to worse priority.\n"
+        "If action=move, uci must be one of allowed_moves exactly.\n"
+        "If action=ask_any, uci must be null.\n\n"
+        f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=True, sort_keys=True)}"
+    )
+
+
+def build_followup_user_prompt(
+    state: dict[str, Any],
+    *,
+    feedback: list[str] | None = None,
+    exclude_actions: list[dict[str, Any]] | None = None,
+    recent_updates: list[str] | None = None,
+) -> str:
+    allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
+    possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
+    target_count = min(model_batch_size(), max(len(allowed_moves), 1 if "ask_any" in possible_actions else 0))
+    payload = {
+        "phase": "turn_update",
+        "turn": state.get("turn"),
+        "move_number": state.get("move_number"),
+        "possible_actions": possible_actions,
+        "allowed_moves": allowed_moves,
+        "new_scoresheet_items": (recent_updates or [])[-10:],
+        "feedback_this_turn": (feedback or [])[-6:],
+        "already_tried_this_turn": [format_action(item) for item in (exclude_actions or [])[-20:]],
+        "target_count": target_count,
+    }
+    return (
+        "Update since your last ranked list JSON follows.\n"
+        "Use the new_scoresheet_items and feedback_this_turn to avoid stale ideas.\n"
         "Return exactly target_count unique candidates when possible, ordered from best to worse priority.\n"
         "If action=move, uci must be one of allowed_moves exactly.\n"
         "If action=ask_any, uci must be null.\n\n"
@@ -489,27 +571,40 @@ def openai_enabled() -> bool:
     return bool(os.environ.get("OPENAI_API_KEY", "").strip())
 
 
-def call_openai(prompt: Any) -> dict[str, Any]:
+def call_openai(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    previous_response_id: str | None = None,
+    prompt_cache_key: str | None = None,
+) -> dict[str, Any]:
     api_key = os.environ["OPENAI_API_KEY"].strip()
     model = os.environ.get("OPENAI_MODEL", "gpt-5.4-nano").strip()
+    payload: dict[str, Any] = {
+        "model": model,
+        "instructions": system_prompt,
+        "input": user_prompt,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": ACTION_SCHEMA_NAME,
+                "schema": action_schema()["schema"],
+                "strict": True,
+            }
+        },
+    }
+    if previous_response_id:
+        payload["previous_response_id"] = previous_response_id
+    if prompt_cache_key:
+        payload["prompt_cache_key"] = prompt_cache_key
+
     response = requests.post(
         f"{openai_base_url()}/responses",
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
-        json={
-            "model": model,
-            "input": prompt,
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": ACTION_SCHEMA_NAME,
-                    "schema": action_schema()["schema"],
-                    "strict": True,
-                }
-            },
-        },
+        json=payload,
         timeout=openai_timeout_seconds(),
     )
     response.raise_for_status()
@@ -622,25 +717,50 @@ def fallback_ranked_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
 def choose_ranked_actions(
     state: dict[str, Any],
     *,
+    game_id: str,
+    conversation: dict[str, Any] | None = None,
     feedback: list[str] | None = None,
     exclude_actions: list[dict[str, Any]] | None = None,
-) -> tuple[list[dict[str, Any]], str]:
+    recent_updates: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], str, str | None]:
     if not openai_enabled():
-        return fallback_ranked_actions(state), "fallback_no_openai_key"
+        return fallback_ranked_actions(state), "fallback_no_openai_key", None
 
     try:
-        prompt = [
-            {"role": "system", "content": build_system_prompt(state.get("rule_variant", "berkeley_any"))},
-            {"role": "user", "content": build_user_prompt(state, feedback=feedback, exclude_actions=exclude_actions)},
-        ]
-        raw_response = call_openai(prompt)
+        system_prompt = build_system_prompt(state.get("rule_variant", "berkeley_any"))
+        previous_response_id = str((conversation or {}).get("response_id") or "").strip() or None
+        if previous_response_id:
+            user_prompt = build_followup_user_prompt(
+                state,
+                feedback=feedback,
+                exclude_actions=exclude_actions,
+                recent_updates=recent_updates,
+            )
+        else:
+            user_prompt = build_initial_user_prompt(state)
+
+        raw_response = call_openai(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            previous_response_id=previous_response_id,
+            prompt_cache_key=f"kriegspiel-bot-gpt-nano:{game_id}",
+        )
         decisions = normalize_ranked_decisions(parse_model_decision(raw_response), state)
+        response_id = raw_response.get("id") if isinstance(raw_response.get("id"), str) else None
+        cached_tokens = (
+            raw_response.get("usage", {})
+            .get("input_tokens_details", {})
+            .get("cached_tokens", 0)
+            if isinstance(raw_response.get("usage"), dict)
+            else 0
+        )
+        logger.debug("%s: model usage cached_tokens=%s", game_id, cached_tokens)
         if decisions:
-            return decisions, "model"
+            return decisions, "model", response_id
     except (KeyError, ValueError, json.JSONDecodeError, requests.RequestException) as exc:
         logger.warning("model selection failed: %s", exc)
 
-    return fallback_ranked_actions(state), "fallback"
+    return fallback_ranked_actions(state), "fallback", None
 
 
 def format_action(decision: dict[str, Any]) -> str:
@@ -654,6 +774,7 @@ def maybe_play_game(game_id: str) -> bool:
     feedback: list[str] = []
     tried_actions: list[dict[str, Any]] = []
     acted = False
+    conversation = get_conversation_state(game_id)
 
     for _batch in range(max_model_batches_per_turn()):
         state = get_json(f"/api/game/{game_id}/state")
@@ -662,7 +783,34 @@ def maybe_play_game(game_id: str) -> bool:
         if isinstance(metadata.get("rule_variant"), str):
             state["rule_variant"] = metadata["rule_variant"]
 
-        decisions, source = choose_ranked_actions(state, feedback=feedback, exclude_actions=tried_actions)
+        scoresheet = state.get("scoresheet") if isinstance(state.get("scoresheet"), dict) else {}
+        recent_referee = extract_recent_referee_items(scoresheet, limit=10)
+        current_turn_signature = turn_signature(state)
+        previous_turn_signature = str(conversation.get("turn_signature") or "")
+        if previous_turn_signature != current_turn_signature:
+            tried_actions = []
+            feedback = []
+
+        previous_recent_referee = conversation.get("recent_referee_items")
+        if not isinstance(previous_recent_referee, list):
+            previous_recent_referee = []
+        recent_updates = new_recent_items(previous_recent_referee, recent_referee)
+
+        decisions, source, response_id = choose_ranked_actions(
+            state,
+            game_id=game_id,
+            conversation=conversation,
+            feedback=feedback,
+            exclude_actions=tried_actions,
+            recent_updates=recent_updates,
+        )
+        conversation = {
+            "response_id": response_id or conversation.get("response_id"),
+            "turn_signature": current_turn_signature,
+            "scoresheet_digest": scoresheet_digest(scoresheet),
+            "recent_referee_items": recent_referee,
+        }
+        save_conversation_state(game_id, conversation)
         if not decisions:
             return acted
 
@@ -674,10 +822,22 @@ def maybe_play_game(game_id: str) -> bool:
                 acted = acted or bool(result.get("move_done"))
                 logger.debug("%s: %s move %s -> %s", game_id, source, decision["uci"], result["announcement"])
                 if result.get("move_done"):
-                    feedback = [
-                        f"Move complete: {result.get('announcement')}",
-                        f"Opponent/new turn: {result.get('turn')}",
-                    ]
+                    state_after = get_json(f"/api/game/{game_id}/state")
+                    if isinstance(metadata.get("rule_variant"), str):
+                        state_after["rule_variant"] = metadata["rule_variant"]
+                    scoresheet_after = state_after.get("scoresheet") if isinstance(state_after.get("scoresheet"), dict) else {}
+                    recent_after = extract_recent_referee_items(scoresheet_after, limit=10)
+                    recent_updates_after = new_recent_items(recent_referee, recent_after)
+                    feedback = [f"Move complete: {result.get('announcement')}"]
+                    if recent_updates_after:
+                        feedback.append("New referee announcements: " + " || ".join(recent_updates_after))
+                    conversation = {
+                        "response_id": conversation.get("response_id"),
+                        "turn_signature": turn_signature(state_after),
+                        "scoresheet_digest": scoresheet_digest(scoresheet_after),
+                        "recent_referee_items": recent_after,
+                    }
+                    save_conversation_state(game_id, conversation)
                     tried_actions = []
                     batch_success = True
                     break
@@ -687,13 +847,62 @@ def maybe_play_game(game_id: str) -> bool:
             result = post_json(f"/api/game/{game_id}/ask-any")
             acted = acted or bool(result.get("move_done"))
             logger.debug("%s: %s ask-any -> %s", game_id, source, result["announcement"])
+            state_after = get_json(f"/api/game/{game_id}/state")
+            if isinstance(metadata.get("rule_variant"), str):
+                state_after["rule_variant"] = metadata["rule_variant"]
+            scoresheet_after = state_after.get("scoresheet") if isinstance(state_after.get("scoresheet"), dict) else {}
+            recent_after = extract_recent_referee_items(scoresheet_after, limit=10)
+            recent_updates_after = new_recent_items(recent_referee, recent_after)
             feedback = [f"Ask-any result: {result.get('announcement')}"]
+            if recent_updates_after:
+                feedback.append("New referee announcements: " + " || ".join(recent_updates_after))
+            feedback.append(
+                "New possible actions: "
+                + json.dumps(
+                    {
+                        "possible_actions": state_after.get("possible_actions"),
+                        "allowed_moves": state_after.get("allowed_moves"),
+                    },
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                )
+            )
+            conversation = {
+                "response_id": conversation.get("response_id"),
+                "turn_signature": turn_signature(state_after),
+                "scoresheet_digest": scoresheet_digest(scoresheet_after),
+                "recent_referee_items": recent_after,
+            }
+            save_conversation_state(game_id, conversation)
             tried_actions = []
             batch_success = True
             break
 
         if not batch_success:
+            refreshed_state = get_json(f"/api/game/{game_id}/state")
+            if isinstance(metadata.get("rule_variant"), str):
+                refreshed_state["rule_variant"] = metadata["rule_variant"]
+            refreshed_scoresheet = refreshed_state.get("scoresheet") if isinstance(refreshed_state.get("scoresheet"), dict) else {}
+            refreshed_recent = extract_recent_referee_items(refreshed_scoresheet, limit=10)
             feedback.append("Top-ranked batch failed; provide the next best legal candidates.")
+            feedback.append(
+                "Current legal options now: "
+                + json.dumps(
+                    {
+                        "possible_actions": refreshed_state.get("possible_actions"),
+                        "allowed_moves": refreshed_state.get("allowed_moves"),
+                    },
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                )
+            )
+            conversation = {
+                "response_id": conversation.get("response_id"),
+                "turn_signature": turn_signature(refreshed_state),
+                "scoresheet_digest": scoresheet_digest(refreshed_scoresheet),
+                "recent_referee_items": refreshed_recent,
+            }
+            save_conversation_state(game_id, conversation)
             continue
 
     return acted
