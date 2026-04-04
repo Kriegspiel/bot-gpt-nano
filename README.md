@@ -32,20 +32,20 @@ The bot reads the live rules text from the sibling `content` repository:
 By default the registration email is `bot-gpt-nano@kriegspiel.org`.
 
 By default the bot also keeps one open lobby game available for humans to join,
-but only while it has fewer than 5 active games. That behavior is controlled with:
+but only while it has fewer than 1 active game. That behavior is controlled with:
 
 - `KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME=true|false`
 - `KRIEGSPIEL_AUTO_CREATE_RULE_VARIANT=berkeley|berkeley_any`
 - `KRIEGSPIEL_AUTO_CREATE_PLAY_AS=white|black|random`
 - `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any`
-- `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=5`
+- `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
 
 Bot-vs-bot play is also enabled by default:
 
 - the bot checks open waiting games
 - it will only consider games created by another bot
 - it will try to join one with 10% probability on a poll cycle
-- it uses the same 5-active-game cap for intentional bot-vs-bot joins
+- it uses the same 1-active-game cap for intentional bot-vs-bot joins
 - it keeps a local one-minute cooldown between bot-vs-bot join attempts to match backend rules
 
 OpenAI prompting defaults:
