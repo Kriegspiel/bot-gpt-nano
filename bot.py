@@ -34,7 +34,7 @@ DEFAULT_TIMEOUT_SECONDS = 20
 ACTION_SCHEMA_NAME = "kriegspiel_next_action"
 DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE = 1
 BOT_JOIN_COOLDOWN_SECONDS = 60
-BOT_GAME_PICK_PROBABILITY = 0.1
+BOT_GAME_PICK_PROBABILITY = 0.01
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -180,7 +180,7 @@ def post_json(path: str, payload: dict[str, Any] | None = None) -> dict[str, Any
 
 
 def auto_create_enabled() -> bool:
-    raw = os.environ.get("KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME", "true").strip().lower()
+    raw = os.environ.get("KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME", "false").strip().lower()
     return raw not in {"0", "false", "no", "off"}
 
 
