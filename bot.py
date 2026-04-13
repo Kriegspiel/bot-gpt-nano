@@ -37,10 +37,13 @@ BOT_JOIN_COOLDOWN_SECONDS = 60
 BOT_GAME_PICK_PROBABILITY = 0.001
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
+DEFAULT_OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
+DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+_OPENAI_PREFLIGHT_CACHE = {"ready": None, "expires_at": 0.0, "reason": "unchecked"}
 
 
 def load_env_file(path: str | Path = ENV_PATH) -> None:
@@ -70,6 +73,22 @@ def openai_timeout_seconds() -> float:
         return max(5.0, float(raw))
     except ValueError:
         return 45.0
+
+
+def openai_preflight_success_ttl_seconds() -> float:
+    raw = os.environ.get("OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS", str(DEFAULT_OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS)).strip()
+    try:
+        return max(5.0, float(raw))
+    except ValueError:
+        return DEFAULT_OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS
+
+
+def openai_preflight_failure_ttl_seconds() -> float:
+    raw = os.environ.get("OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS", str(DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS)).strip()
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS
 
 
 def auth_headers() -> dict[str, str]:
@@ -571,6 +590,72 @@ def openai_enabled() -> bool:
     return bool(os.environ.get("OPENAI_API_KEY", "").strip())
 
 
+def cache_openai_preflight(ready: bool, *, reason: str, ttl_seconds: float) -> tuple[bool, str]:
+    _OPENAI_PREFLIGHT_CACHE["ready"] = ready
+    _OPENAI_PREFLIGHT_CACHE["reason"] = reason
+    _OPENAI_PREFLIGHT_CACHE["expires_at"] = time.time() + max(0.0, ttl_seconds)
+    return ready, reason
+
+
+def describe_http_error(exc: requests.RequestException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return str(exc) or exc.__class__.__name__
+
+    pieces = [f"http_{response.status_code}"]
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            for key in ("type", "code", "message"):
+                value = error.get(key)
+                if value:
+                    pieces.append(str(value))
+        detail = payload.get("detail")
+        if isinstance(detail, str) and detail:
+            pieces.append(detail)
+    elif response.text:
+        pieces.append(response.text.strip())
+
+    return ": ".join(dict.fromkeys(piece for piece in pieces if piece))
+
+
+def openai_preflight_status(force: bool = False) -> tuple[bool, str]:
+    if not openai_enabled():
+        return cache_openai_preflight(False, reason="missing_openai_api_key", ttl_seconds=openai_preflight_failure_ttl_seconds())
+
+    now = time.time()
+    if not force and _OPENAI_PREFLIGHT_CACHE["ready"] is not None and now < float(_OPENAI_PREFLIGHT_CACHE["expires_at"]):
+        return bool(_OPENAI_PREFLIGHT_CACHE["ready"]), str(_OPENAI_PREFLIGHT_CACHE["reason"])
+
+    try:
+        response = requests.post(
+            f"{openai_base_url()}/responses",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY'].strip()}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": os.environ.get("OPENAI_MODEL", "gpt-5.4-nano").strip(),
+                "instructions": "Reply with OK.",
+                "input": "Ping",
+                "max_output_tokens": 1,
+            },
+            timeout=openai_timeout_seconds(),
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        reason = describe_http_error(exc)
+        logger.warning("openai preflight failed: %s", reason)
+        return cache_openai_preflight(False, reason=reason, ttl_seconds=openai_preflight_failure_ttl_seconds())
+
+    return cache_openai_preflight(True, reason="ok", ttl_seconds=openai_preflight_success_ttl_seconds())
+
+
 def call_openai(
     *,
     system_prompt: str,
@@ -724,7 +809,12 @@ def choose_ranked_actions(
     recent_updates: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, str | None]:
     if not openai_enabled():
-        return fallback_ranked_actions(state), "fallback_no_openai_key", None
+        return [], "openai_unavailable", None
+
+    ready, reason = openai_preflight_status()
+    if not ready:
+        logger.warning("%s: skipping turn because OpenAI is unavailable (%s)", game_id, reason)
+        return [], "openai_unavailable", None
 
     try:
         system_prompt = build_system_prompt(state.get("rule_variant", "berkeley_any"))
@@ -757,7 +847,12 @@ def choose_ranked_actions(
         logger.debug("%s: model usage cached_tokens=%s", game_id, cached_tokens)
         if decisions:
             return decisions, "model", response_id
-    except (KeyError, ValueError, json.JSONDecodeError, requests.RequestException) as exc:
+    except requests.RequestException as exc:
+        reason = describe_http_error(exc)
+        cache_openai_preflight(False, reason=reason, ttl_seconds=openai_preflight_failure_ttl_seconds())
+        logger.warning("model selection failed: %s", reason)
+        return [], "openai_unavailable", None
+    except (KeyError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("model selection failed: %s", exc)
 
     return fallback_ranked_actions(state), "fallback", None
@@ -938,7 +1033,7 @@ def main() -> None:
     if not os.environ.get("KRIEGSPIEL_BOT_TOKEN"):
         raise SystemExit("KRIEGSPIEL_BOT_TOKEN is missing. Run with --register first.")
     if not openai_enabled():
-        logger.warning("OPENAI_API_KEY is missing; running in fallback mode.")
+        logger.warning("OPENAI_API_KEY is missing; the bot will skip turns until it is configured.")
 
     run_loop(args.poll_seconds)
 
