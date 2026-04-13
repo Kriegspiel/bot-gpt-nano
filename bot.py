@@ -314,6 +314,11 @@ def maybe_join_bot_lobby_game(games: list[dict[str, Any]], *, rng: random.Random
     if rng.random() >= BOT_GAME_PICK_PROBABILITY:
         return False
 
+    ready, reason = openai_preflight_status()
+    if not ready:
+        logger.warning("skipping bot-game join because OpenAI is unavailable (%s)", reason)
+        return False
+
     game_code = candidate.get("game_code")
     if not isinstance(game_code, str) or not game_code.strip():
         return False
@@ -809,12 +814,7 @@ def choose_ranked_actions(
     recent_updates: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, str | None]:
     if not openai_enabled():
-        return [], "openai_unavailable", None
-
-    ready, reason = openai_preflight_status()
-    if not ready:
-        logger.warning("%s: skipping turn because OpenAI is unavailable (%s)", game_id, reason)
-        return [], "openai_unavailable", None
+        return fallback_ranked_actions(state), "fallback_no_openai_key", None
 
     try:
         system_prompt = build_system_prompt(state.get("rule_variant", "berkeley_any"))
@@ -849,9 +849,7 @@ def choose_ranked_actions(
             return decisions, "model", response_id
     except requests.RequestException as exc:
         reason = describe_http_error(exc)
-        cache_openai_preflight(False, reason=reason, ttl_seconds=openai_preflight_failure_ttl_seconds())
         logger.warning("model selection failed: %s", reason)
-        return [], "openai_unavailable", None
     except (KeyError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("model selection failed: %s", exc)
 
@@ -1033,7 +1031,7 @@ def main() -> None:
     if not os.environ.get("KRIEGSPIEL_BOT_TOKEN"):
         raise SystemExit("KRIEGSPIEL_BOT_TOKEN is missing. Run with --register first.")
     if not openai_enabled():
-        logger.warning("OPENAI_API_KEY is missing; the bot will skip turns until it is configured.")
+        logger.warning("OPENAI_API_KEY is missing; bot-vs-bot joins will be skipped and turns will use fallback mode.")
 
     run_loop(args.poll_seconds)
 
