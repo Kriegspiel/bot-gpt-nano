@@ -11,8 +11,8 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - builds a prompt from the current rule variant, private FEN, legal actions, and private scoresheet
 - asks an OpenAI model for the top ranked next actions in strict JSON
 - validates the model output against the server-provided legal actions
-- checks OpenAI availability with a tiny cached preflight call before taking a turn
-- skips the turn if OpenAI is unavailable or out of quota
+- checks OpenAI availability with a tiny cached preflight call before joining a new bot-vs-bot game
+- skips the join if OpenAI is unavailable or out of quota
 - still falls back safely if the model response itself is malformed
 
 ## Setup

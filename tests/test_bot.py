@@ -189,15 +189,17 @@ class BotTests(unittest.TestCase):
         games = []
         open_games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
 
-        with mock.patch.object(bot, "get_json", return_value={"games": open_games}):
-            with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
-                with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 0}):
-                    with mock.patch.object(bot, "save_state"):
-                        with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
-                            with mock.patch.object(bot.random, "random", return_value=0.0005):
-                                with mock.patch.object(bot, "post_json", return_value={"game_id": "g1", "game_code": "BOT123"}) as post_json:
-                                    self.assertTrue(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
-                                    post_json.assert_called_once_with("/api/game/join/BOT123")
+        with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False):
+            with mock.patch.object(bot, "get_json", return_value={"games": open_games}):
+                with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
+                    with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 0}):
+                        with mock.patch.object(bot, "save_state"):
+                            with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
+                                with mock.patch.object(bot.random, "random", return_value=0.0005):
+                                    with mock.patch.object(bot, "openai_preflight_status", return_value=(True, "ok")):
+                                        with mock.patch.object(bot, "post_json", return_value={"game_id": "g1", "game_code": "BOT123"}) as post_json:
+                                            self.assertTrue(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
+                                            post_json.assert_called_once_with("/api/game/join/BOT123")
 
     def test_should_not_join_bot_lobby_game_when_active_cap_reached(self) -> None:
         games = [{"state": "active"} for _ in range(5)]
@@ -217,19 +219,21 @@ class BotTests(unittest.TestCase):
                 self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
         self.assertEqual(post.call_count, 1)
 
-    def test_choose_ranked_actions_skips_turn_when_openai_unavailable(self) -> None:
-        state = {
-            "rule_variant": "berkeley_any",
-            "possible_actions": ["move"],
-            "allowed_moves": ["e2e4"],
-            "scoresheet": {"viewer_color": "white", "turns": []},
-        }
+    def test_maybe_join_bot_lobby_game_skips_join_when_openai_unavailable(self) -> None:
+        games = []
+        open_games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
+
         with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False):
-            with mock.patch.object(bot, "openai_preflight_status", return_value=(False, "http_429: insufficient_quota")):
-                decisions, source, response_id = bot.choose_ranked_actions(state, game_id="game-1")
-        self.assertEqual(decisions, [])
-        self.assertEqual(source, "openai_unavailable")
-        self.assertIsNone(response_id)
+            with mock.patch.object(bot, "get_json", return_value={"games": open_games}):
+                with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
+                    with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 0}):
+                        with mock.patch.object(bot, "save_state"):
+                            with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
+                                with mock.patch.object(bot.random, "random", return_value=0.0005):
+                                    with mock.patch.object(bot, "openai_preflight_status", return_value=(False, "http_429: insufficient_quota")):
+                                        with mock.patch.object(bot, "post_json") as post_json:
+                                            self.assertFalse(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
+                                            post_json.assert_not_called()
 
 
 if __name__ == "__main__":
