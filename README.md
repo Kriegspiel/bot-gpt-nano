@@ -11,7 +11,9 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - builds a prompt from the current rule variant, private FEN, legal actions, and private scoresheet
 - asks an OpenAI model for the top ranked next actions in strict JSON
 - validates the model output against the server-provided legal actions
-- falls back safely if the model response is invalid or the API call fails
+- checks OpenAI availability with a tiny cached preflight call before taking a turn
+- skips the turn if OpenAI is unavailable or out of quota
+- still falls back safely if the model response itself is malformed
 
 ## Setup
 
@@ -58,6 +60,8 @@ OpenAI prompting defaults:
   - `OPENAI_MODEL=gpt-5.4-nano`
   - `OPENAI_MODEL_BATCH_SIZE=10`
   - `OPENAI_MAX_BATCHES_PER_TURN=5`
+  - `OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS=60`
+  - `OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS=15`
 
 ## Test
 
