@@ -648,7 +648,7 @@ def openai_preflight_status(force: bool = False) -> tuple[bool, str]:
                 "model": os.environ.get("OPENAI_MODEL", "gpt-5.4-nano").strip(),
                 "instructions": "Reply with OK.",
                 "input": "Ping",
-                "max_output_tokens": 1,
+                "max_output_tokens": 16,
             },
             timeout=openai_timeout_seconds(),
         )
