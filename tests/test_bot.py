@@ -218,6 +218,7 @@ class BotTests(unittest.TestCase):
                 self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
                 self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
         self.assertEqual(post.call_count, 1)
+        self.assertGreaterEqual(post.call_args.kwargs["json"]["max_output_tokens"], 16)
 
     def test_maybe_join_bot_lobby_game_skips_join_when_openai_unavailable(self) -> None:
         games = []
