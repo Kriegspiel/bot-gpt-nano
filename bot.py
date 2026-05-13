@@ -1004,7 +1004,7 @@ def maybe_play_game(game_id: str) -> bool:
 def run_loop(poll_seconds: float) -> None:
     while True:
         try:
-            mine = get_json("/game/mine")
+            mine = get_json("/game/mine/active")
             games = mine.get("games", [])
             maybe_create_lobby_game(games)
             maybe_join_bot_lobby_game(games)
@@ -1021,7 +1021,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Run the Kriegspiel GPT Nano bot.")
     parser.add_argument("--register", action="store_true", help="Register the bot and persist the returned token.")
-    parser.add_argument("--poll-seconds", type=float, default=3.0, help="Seconds between /game/mine polls.")
+    parser.add_argument("--poll-seconds", type=float, default=3.0, help="Seconds between /game/mine/active polls.")
     args = parser.parse_args()
 
     if args.register:
