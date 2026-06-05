@@ -11,6 +11,7 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - builds a prompt from the current rule variant, private FEN, legal actions, and private scoresheet
 - asks an OpenAI model for the top ranked next actions in strict JSON
 - validates the model output against the server-provided legal actions
+- resigns instead of asking the model once the server-reported move number reaches 256
 - checks OpenAI availability with a tiny cached preflight call before joining a new bot-vs-bot game
 - skips the join if OpenAI is unavailable or out of quota
 - still falls back safely if the model response itself is malformed
@@ -42,6 +43,7 @@ By default the bot does not create open lobby games on its own. That behavior is
 - `KRIEGSPIEL_AUTO_CREATE_PLAY_AS=white|black|random`
 - `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any`
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
+- `KRIEGSPIEL_RESIGN_AFTER_MOVE_NUMBER=256`
 
 Bot-vs-bot play is also enabled by default:
 

@@ -42,6 +42,7 @@ BOT_JOIN_COOLDOWN_SECONDS = 60
 BOT_GAME_PICK_PROBABILITY = 0.001
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
+DEFAULT_RESIGN_AFTER_MOVE_NUMBER = 256
 DEFAULT_OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
@@ -488,6 +489,25 @@ def max_model_batches_per_turn() -> int:
         return DEFAULT_MAX_MODEL_BATCHES_PER_TURN
 
 
+def resign_after_move_number() -> int:
+    raw = os.environ.get("KRIEGSPIEL_RESIGN_AFTER_MOVE_NUMBER", str(DEFAULT_RESIGN_AFTER_MOVE_NUMBER)).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_RESIGN_AFTER_MOVE_NUMBER
+
+
+def should_resign_for_move_limit(state: dict[str, Any]) -> bool:
+    limit = resign_after_move_number()
+    if limit <= 0:
+        return False
+    try:
+        move_number = int(state.get("move_number", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return move_number >= limit
+
+
 def extract_recent_referee_items(scoresheet: dict[str, Any], *, limit: int = 8) -> list[str]:
     turns = scoresheet.get("turns") if isinstance(scoresheet.get("turns"), list) else []
     lines: list[str] = []
@@ -920,6 +940,17 @@ def maybe_play_game(game_id: str) -> bool:
         state = get_json(f"/game/{game_id}/state")
         if state.get("state") != "active" or state.get("turn") != state.get("your_color"):
             return acted
+        if should_resign_for_move_limit(state):
+            result = post_json(f"/game/{game_id}/resign")
+            clear_conversation_state(game_id)
+            logger.info(
+                "%s: resigned at move %s after reaching move limit %s -> %s",
+                game_id,
+                state.get("move_number"),
+                resign_after_move_number(),
+                result.get("result"),
+            )
+            return True
         if isinstance(metadata.get("rule_variant"), str):
             state["rule_variant"] = metadata["rule_variant"]
 
