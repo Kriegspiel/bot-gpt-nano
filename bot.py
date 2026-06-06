@@ -12,7 +12,6 @@ deterministic legal action so the service remains playable.
 from __future__ import annotations
 
 import argparse
-from functools import lru_cache
 import hashlib
 import json
 import logging
@@ -30,11 +29,6 @@ STATE_PATH = BASE_DIR / ".bot-state.json"
 ENV_PATH = BASE_DIR / ".env"
 
 
-def default_content_dir() -> Path:
-    return BASE_DIR.parent / "ks-content" / "rules"
-
-
-CONTENT_DIR = Path(os.environ.get("KRIEGSPIEL_CONTENT_RULES_DIR", default_content_dir()))
 DEFAULT_TIMEOUT_SECONDS = 20
 ACTION_SCHEMA_NAME = "kriegspiel_next_action"
 DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE = 1
@@ -46,6 +40,48 @@ DEFAULT_RESIGN_AFTER_MOVE_NUMBER = 256
 DEFAULT_OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
+SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")
+DEFAULT_SUPPORTED_RULE_VARIANTS = ",".join(SUPPORTED_RULE_VARIANTS)
+RULESET_SUMMARIES = {
+    "berkeley": (
+        "Berkeley: hidden opponent board, normal chess legality. Illegal attempts are private to the mover. "
+        "Public referee information after legal moves: capture square, check direction, mate/stalemate. "
+        "Captured piece identity, promotion, castling, and en passant identity are not announced. No ask_any action."
+    ),
+    "berkeley_any": (
+        "Berkeley + Any: hidden opponent board, normal chess legality. Illegal attempts are private to the mover. "
+        "Public referee information after legal moves: capture square, check direction, mate/stalemate. "
+        "Captured piece identity, promotion, castling, and en passant identity are not announced. "
+        "The ask_any action asks whether any legal pawn capture exists. If the referee says there are pawn captures, "
+        "the player must complete a legal pawn capture on that turn."
+    ),
+    "cincinnati": (
+        "Cincinnati: hidden opponent board, normal chess tries until a legal move stands. Illegal/Nonsense tries are public. "
+        "Before turns, public pawn-capture availability may be announced. Legal captures announce square and whether the captured man was pawn or piece. "
+        "Checks announce direction. Promotions and castling are not announced."
+    ),
+    "wild16": (
+        "Wild 16: hidden opponent board, normal chess. Illegal attempts are private to the mover. "
+        "Before turns, the referee publicly announces the count of legal pawn captures as pawn tries. "
+        "Captures announce square and pawn-vs-piece identity; checks announce direction. Promotion and castling are not announced."
+    ),
+    "rand": (
+        "RAND: hidden opponent board, normal chess with public rebuffs/no answers. "
+        "Before turns, the referee announces source squares for pawns with legal capture tries. "
+        "Captures announce square and pawn-vs-piece identity; checks announce direction; promotions are publicly announced. Stalemate is a loss."
+    ),
+    "english": (
+        "English: hidden opponent board, normal chess legality. Illegal moves are announced and must be retracted. "
+        "Captures announce the capture square but not captured identity; en passant is announced explicitly. Checks announce direction. "
+        "ask_any asks whether any pawn capture exists; after a positive answer, one pawn capture must be tried, and if that try is illegal any legal move may follow."
+    ),
+    "crazykrieg": (
+        "CrazyKrieg: hidden opponent board plus Crazyhouse reserves. Players may make normal chess moves or legal reserve drops. "
+        "Both reserves are public; drop piece type is public but drop square is hidden unless later revealed by announcements. "
+        "Captures announce square and exact reserve identity of the captured unit; promoted pawns enter reserve as pawns. "
+        "Checks announce direction. ask_any checks visible pawns for legal captures; after a positive answer, one pawn capture must be tried, and if that try is illegal any legal move may follow."
+    ),
+}
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
@@ -194,6 +230,15 @@ def register_bot() -> None:
     logger.debug("%s", json.dumps(payload, indent=2))
 
 
+def sync_bot_profile() -> bool:
+    try:
+        post_json("/bots/profile", {"supported_rule_variants": supported_rule_variants()})
+    except requests.RequestException as exc:
+        logger.warning("failed to sync bot profile: %s", exc)
+        return False
+    return True
+
+
 def get_json(path: str) -> dict[str, Any]:
     response = requests.get(f"{base_url()}{path}", headers=auth_headers(), timeout=DEFAULT_TIMEOUT_SECONDS)
     response.raise_for_status()
@@ -269,13 +314,13 @@ def create_payload() -> dict[str, str]:
 
 
 def supported_rule_variants() -> list[str]:
-    raw = os.environ.get("KRIEGSPIEL_SUPPORTED_RULE_VARIANTS", "berkeley,berkeley_any")
+    raw = os.environ.get("KRIEGSPIEL_SUPPORTED_RULE_VARIANTS", DEFAULT_SUPPORTED_RULE_VARIANTS)
     variants: list[str] = []
     for item in raw.split(","):
         value = item.strip()
-        if value in {"berkeley", "berkeley_any"} and value not in variants:
+        if value in SUPPORTED_RULE_VARIANTS and value not in variants:
             variants.append(value)
-    return variants or ["berkeley", "berkeley_any"]
+    return variants or list(SUPPORTED_RULE_VARIANTS)
 
 
 def active_games(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -397,55 +442,31 @@ def maybe_create_lobby_game(games: list[dict[str, Any]]) -> bool:
     return True
 
 
-def strip_frontmatter(text: str) -> str:
-    if not text.startswith("---\n"):
-        return text.strip()
-    parts = text.split("\n---\n", 1)
-    return parts[1].strip() if len(parts) == 2 else text.strip()
-
-
-def _variant_any_rule_excerpt() -> str:
-    readme = (CONTENT_DIR / "README.md").read_text()
-    lines = []
-    for line in readme.splitlines():
-        if line.startswith("| Berkeley + Any"):
-            lines.append(line.strip())
-    return "\n".join(lines)
-
-
-@lru_cache(maxsize=4)
-def load_rules_text(rule_variant: str) -> str:
-    berkeley = strip_frontmatter((CONTENT_DIR / "berkeley.md").read_text())
-    if rule_variant == "berkeley_any":
-        any_excerpt = _variant_any_rule_excerpt()
-        appendix = (
-            "\n\nAdditional variant note for Berkeley + Any:\n"
-            "The current game allows the special 'Any?' action. "
-            "If the referee says there are pawn captures, the player must make one.\n"
-        )
-        if any_excerpt:
-            appendix += f"\nRules comparison excerpt:\n{any_excerpt}\n"
-        return berkeley + appendix
-    return berkeley
+def recent_scoresheet_turns(scoresheet: dict[str, Any], *, max_turns: int) -> list[dict[str, Any]]:
+    turns = scoresheet.get("turns") if isinstance(scoresheet.get("turns"), list) else []
+    recent_turns = turns[-max_turns:]
+    payload: list[dict[str, Any]] = []
+    for turn in recent_turns:
+        item: dict[str, Any] = {"turn": turn.get("turn")}
+        for color in ("white", "black"):
+            entries = turn.get(color) if isinstance(turn.get(color), list) else []
+            item[color] = [
+                normalized
+                for normalized in (normalize_scoresheet_entry(entry) for entry in entries)
+                if normalized
+            ]
+        payload.append(item)
+    return payload
 
 
 def summarize_scoresheet_turns(scoresheet: dict[str, Any], *, max_turns: int) -> list[str]:
-    viewer_color = scoresheet.get("viewer_color", "unknown")
-    turns = scoresheet.get("turns") if isinstance(scoresheet.get("turns"), list) else []
-    recent_turns = turns[-max_turns:]
-    lines = [f"Viewer color: {viewer_color}", f"Recent turns kept: {len(recent_turns)}"]
-
-    for turn in recent_turns:
+    lines: list[str] = []
+    for turn in recent_scoresheet_turns(scoresheet, max_turns=max_turns):
         turn_number = turn.get("turn")
-        lines.append(f"Turn {turn_number}:")
         for color in ("white", "black"):
             entries = turn.get(color) if isinstance(turn.get(color), list) else []
-            if not entries:
-                continue
             for entry in entries:
-                normalized = normalize_scoresheet_entry(entry)
-                if normalized:
-                    lines.append(f"- {color}: {normalized}")
+                lines.append(f"Turn {turn_number} {color}: {entry}")
     return lines
 
 
@@ -551,51 +572,106 @@ def new_recent_items(previous: list[str], current: list[str]) -> list[str]:
 
 
 def build_system_prompt(rule_variant: str) -> str:
-    rules_text = load_rules_text(rule_variant)
+    rules_summary = RULESET_SUMMARIES.get(rule_variant, RULESET_SUMMARIES["berkeley_any"])
     return (
         "You are a strong Kriegspiel player.\n"
         "Use only the provided private information and legal actions.\n"
         "Do not invent moves. Do not suggest illegal actions.\n"
-        "Return unique candidate actions ordered strictly from best to worse priority.\n"
+        "Return up to target_count unique JSON candidate actions ordered strictly from best to worst priority.\n"
         "Candidate 1 must be your best choice, candidate 2 your next-best choice, and so on.\n"
         "Prioritize strategically strong, tactically sound moves that are robust under uncertainty.\n"
+        "If action=move, uci must exactly match one allowed_moves item.\n"
+        "If action=ask_any, uci must be null.\n"
         "Do not explain the rules. Do not include prose outside the JSON schema.\n\n"
-        "Rules and setting:\n"
-        f"Rule variant: {rule_variant}\n"
-        f"{rules_text}\n"
+        f"{rules_summary}\n"
     )
 
 
-def build_initial_user_prompt(
+def _prompt_material_summary(state: dict[str, Any]) -> dict[str, dict[str, int]]:
+    material = state.get("material_summary") if isinstance(state.get("material_summary"), dict) else {}
+    payload: dict[str, dict[str, int]] = {}
+    for color in ("white", "black"):
+        side = material.get(color) if isinstance(material.get(color), dict) else {}
+        if not side:
+            continue
+        item: dict[str, int] = {}
+        pieces_remaining = side.get("pieces_remaining")
+        if isinstance(pieces_remaining, int):
+            item["pieces_remaining"] = pieces_remaining
+        pawns_captured = side.get("pawns_captured")
+        if isinstance(pawns_captured, int):
+            item["pawns_captured"] = pawns_captured
+        if item:
+            payload[color] = item
+    return payload
+
+
+def _prompt_reserve_summary(state: dict[str, Any], *, rule_variant: str) -> dict[str, dict[str, int]]:
+    if rule_variant != "crazykrieg":
+        return {}
+    reserves = state.get("reserve_summary") if isinstance(state.get("reserve_summary"), dict) else {}
+    payload: dict[str, dict[str, int]] = {}
+    for color in ("white", "black"):
+        side = reserves.get(color) if isinstance(reserves.get(color), dict) else {}
+        if side:
+            payload[color] = {
+                piece: int(side.get(piece, 0) or 0)
+                for piece in ("pawns", "knights", "bishops", "rooks", "queens")
+            }
+    return payload
+
+
+def build_turn_snapshot_payload(
     state: dict[str, Any],
-) -> str:
+    *,
+    feedback: list[str] | None = None,
+    exclude_actions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    rule_variant = str(state.get("rule_variant") or "berkeley_any")
     scoresheet = state.get("scoresheet") if isinstance(state.get("scoresheet"), dict) else {}
     allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
     possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
-    max_prompt_turns = int(os.environ.get("OPENAI_MAX_PROMPT_TURNS", "12"))
-    scoresheet_text = summarize_scoresheet_turns(scoresheet, max_turns=max_prompt_turns)
-    recent_referee = extract_recent_referee_items(scoresheet, limit=6)
+    max_prompt_turns = int(os.environ.get("OPENAI_MAX_PROMPT_TURNS", "10"))
     target_count = min(model_batch_size(), max(len(allowed_moves), 1 if "ask_any" in possible_actions else 0))
-    payload = {
-        "phase": "initial_turn_snapshot",
+    payload: dict[str, Any] = {
         "your_color": state.get("your_color"),
-        "game_state": state.get("state"),
         "turn": state.get("turn"),
         "move_number": state.get("move_number"),
         "private_board_fen": state.get("your_fen"),
+        "material": _prompt_material_summary(state),
+        "recent_turns": recent_scoresheet_turns(scoresheet, max_turns=max_prompt_turns),
         "possible_actions": possible_actions,
         "allowed_moves": allowed_moves,
-        "recent_scoresheet_lines": scoresheet_text[-12:],
-        "recent_referee_items": recent_referee,
         "target_count": target_count,
     }
-    return (
-        "Current private state JSON follows.\n"
-        "Return exactly target_count unique candidates when possible, ordered from best to worse priority.\n"
-        "If action=move, uci must be one of allowed_moves exactly.\n"
-        "If action=ask_any, uci must be null.\n\n"
-        f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=True, sort_keys=True)}"
+    reserves = _prompt_reserve_summary(state, rule_variant=rule_variant)
+    if reserves:
+        payload["reserves"] = reserves
+    rejected = [format_action(item) for item in (exclude_actions or [])[-20:]]
+    if rejected:
+        payload["rejected_this_turn"] = rejected
+    retry_feedback = [item for item in (feedback or [])[-6:] if item]
+    if retry_feedback:
+        payload["retry_feedback"] = retry_feedback
+    return payload
+
+
+def build_turn_snapshot_user_prompt(
+    state: dict[str, Any],
+    *,
+    feedback: list[str] | None = None,
+    exclude_actions: list[dict[str, Any]] | None = None,
+) -> str:
+    payload = build_turn_snapshot_payload(
+        state,
+        feedback=feedback,
+        exclude_actions=exclude_actions,
     )
+    return f"Current turn JSON:\n{json.dumps(payload, separators=(',', ':'), ensure_ascii=True, sort_keys=True)}"
+
+
+def build_initial_user_prompt(state: dict[str, Any]) -> str:
+    return build_turn_snapshot_user_prompt(state)
 
 
 def build_followup_user_prompt(
@@ -605,27 +681,11 @@ def build_followup_user_prompt(
     exclude_actions: list[dict[str, Any]] | None = None,
     recent_updates: list[str] | None = None,
 ) -> str:
-    allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
-    possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
-    target_count = min(model_batch_size(), max(len(allowed_moves), 1 if "ask_any" in possible_actions else 0))
-    payload = {
-        "phase": "turn_update",
-        "turn": state.get("turn"),
-        "move_number": state.get("move_number"),
-        "possible_actions": possible_actions,
-        "allowed_moves": allowed_moves,
-        "new_scoresheet_items": (recent_updates or [])[-10:],
-        "feedback_this_turn": (feedback or [])[-6:],
-        "already_tried_this_turn": [format_action(item) for item in (exclude_actions or [])[-20:]],
-        "target_count": target_count,
-    }
-    return (
-        "Update since your last ranked list JSON follows.\n"
-        "Use the new_scoresheet_items and feedback_this_turn to avoid stale ideas.\n"
-        "Return exactly target_count unique candidates when possible, ordered from best to worse priority.\n"
-        "If action=move, uci must be one of allowed_moves exactly.\n"
-        "If action=ask_any, uci must be null.\n\n"
-        f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=True, sort_keys=True)}"
+    _ = recent_updates
+    return build_turn_snapshot_user_prompt(
+        state,
+        feedback=feedback,
+        exclude_actions=exclude_actions,
     )
 
 
@@ -646,9 +706,8 @@ def action_schema() -> dict[str, Any]:
                         "properties": {
                             "action": {"type": "string", "enum": ["move", "ask_any"]},
                             "uci": {"type": ["string", "null"]},
-                            "reason": {"type": "string"},
                         },
-                        "required": ["action", "uci", "reason"],
+                        "required": ["action", "uci"],
                     },
                 }
             },
@@ -732,7 +791,6 @@ def call_openai(
     *,
     system_prompt: str,
     user_prompt: str,
-    previous_response_id: str | None = None,
     prompt_cache_key: str | None = None,
 ) -> dict[str, Any]:
     api_key = os.environ["OPENAI_API_KEY"].strip()
@@ -749,9 +807,8 @@ def call_openai(
                 "strict": True,
             }
         },
+        "max_output_tokens": 512,
     }
-    if previous_response_id:
-        payload["previous_response_id"] = previous_response_id
     if prompt_cache_key:
         payload["prompt_cache_key"] = prompt_cache_key
 
@@ -819,10 +876,12 @@ def normalize_decision(decision: dict[str, Any], state: dict[str, Any]) -> dict[
     if action == "move":
         if "move" not in possible_actions or not isinstance(uci, str):
             return None
-        normalized_uci = uci.strip().lower()
-        if normalized_uci not in allowed_moves:
+        normalized_uci = uci.strip()
+        allowed_by_lower = {str(move).strip().lower(): str(move).strip() for move in allowed_moves}
+        allowed_move = allowed_by_lower.get(normalized_uci.lower())
+        if allowed_move is None:
             return None
-        return {"action": "move", "uci": normalized_uci}
+        return {"action": "move", "uci": allowed_move}
 
     if action == "ask_any":
         if "ask_any" not in possible_actions:
@@ -885,35 +944,30 @@ def choose_ranked_actions(
 
     try:
         system_prompt = build_system_prompt(state.get("rule_variant", "berkeley_any"))
-        previous_response_id = str((conversation or {}).get("response_id") or "").strip() or None
-        if previous_response_id:
-            user_prompt = build_followup_user_prompt(
-                state,
-                feedback=feedback,
-                exclude_actions=exclude_actions,
-                recent_updates=recent_updates,
-            )
-        else:
-            user_prompt = build_initial_user_prompt(state)
+        _ = conversation, recent_updates
+        user_prompt = build_turn_snapshot_user_prompt(
+            state,
+            feedback=feedback,
+            exclude_actions=exclude_actions,
+        )
 
         raw_response = call_openai(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            previous_response_id=previous_response_id,
             prompt_cache_key=f"kriegspiel-bot-gpt-nano:{game_id}",
         )
         decisions = normalize_ranked_decisions(parse_model_decision(raw_response), state)
-        response_id = raw_response.get("id") if isinstance(raw_response.get("id"), str) else None
-        cached_tokens = (
-            raw_response.get("usage", {})
-            .get("input_tokens_details", {})
-            .get("cached_tokens", 0)
-            if isinstance(raw_response.get("usage"), dict)
-            else 0
+        usage = raw_response.get("usage") if isinstance(raw_response.get("usage"), dict) else {}
+        input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
+        logger.debug(
+            "%s: model usage input_tokens=%s cached_tokens=%s output_tokens=%s",
+            game_id,
+            usage.get("input_tokens", 0),
+            input_details.get("cached_tokens", 0),
+            usage.get("output_tokens", 0),
         )
-        logger.debug("%s: model usage cached_tokens=%s", game_id, cached_tokens)
         if decisions:
-            return decisions, "model", response_id
+            return decisions, "model", None
     except requests.RequestException as exc:
         reason = describe_http_error(exc)
         logger.warning("model selection failed: %s", reason)
@@ -967,7 +1021,7 @@ def maybe_play_game(game_id: str) -> bool:
             previous_recent_referee = []
         recent_updates = new_recent_items(previous_recent_referee, recent_referee)
 
-        decisions, source, response_id = choose_ranked_actions(
+        decisions, source, _response_id = choose_ranked_actions(
             state,
             game_id=game_id,
             conversation=conversation,
@@ -976,7 +1030,6 @@ def maybe_play_game(game_id: str) -> bool:
             recent_updates=recent_updates,
         )
         conversation = {
-            "response_id": response_id or conversation.get("response_id"),
             "turn_signature": current_turn_signature,
             "scoresheet_digest": scoresheet_digest(scoresheet),
             "recent_referee_items": recent_referee,
@@ -1003,7 +1056,6 @@ def maybe_play_game(game_id: str) -> bool:
                     if recent_updates_after:
                         feedback.append("New referee announcements: " + " || ".join(recent_updates_after))
                     conversation = {
-                        "response_id": conversation.get("response_id"),
                         "turn_signature": turn_signature(state_after),
                         "scoresheet_digest": scoresheet_digest(scoresheet_after),
                         "recent_referee_items": recent_after,
@@ -1039,7 +1091,6 @@ def maybe_play_game(game_id: str) -> bool:
                 )
             )
             conversation = {
-                "response_id": conversation.get("response_id"),
                 "turn_signature": turn_signature(state_after),
                 "scoresheet_digest": scoresheet_digest(scoresheet_after),
                 "recent_referee_items": recent_after,
@@ -1068,7 +1119,6 @@ def maybe_play_game(game_id: str) -> bool:
                 )
             )
             conversation = {
-                "response_id": conversation.get("response_id"),
                 "turn_signature": turn_signature(refreshed_state),
                 "scoresheet_digest": scoresheet_digest(refreshed_scoresheet),
                 "recent_referee_items": refreshed_recent,
@@ -1112,6 +1162,7 @@ def main() -> None:
     if not openai_enabled():
         logger.warning("OPENAI_API_KEY is missing; bot-vs-bot joins will be skipped and turns will use fallback mode.")
 
+    sync_bot_profile()
     run_loop(args.poll_seconds)
 
 
