@@ -41,6 +41,8 @@ By default the bot does not create open lobby games on its own. That behavior is
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
 - `KRIEGSPIEL_RESIGN_AFTER_MOVE_NUMBER=256`
 
+Existing production env files with the old default `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any` are treated as stale defaults and expanded to all supported rulesets.
+
 Bot-vs-bot play is also enabled by default:
 
 - the bot samples open waiting games at most once per minute
