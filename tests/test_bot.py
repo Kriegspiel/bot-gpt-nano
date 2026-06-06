@@ -137,6 +137,25 @@ class BotTests(unittest.TestCase):
         self.assertIn(summary, system_prompt)
         self.assertNotIn("Cincinnati", system_prompt)
 
+    def test_turn_snapshot_requests_exact_batch_when_enough_actions_exist(self) -> None:
+        allowed_moves = ["a2a3", "b2b3", "c2c3", "d2d3", "e2e3", "f2f3", "g2g3", "h2h3", "b1c3"]
+        state = {
+            "rule_variant": "berkeley_any",
+            "your_color": "white",
+            "turn": "white",
+            "move_number": 1,
+            "your_fen": "fen",
+            "possible_actions": ["move", "ask_any"],
+            "allowed_moves": allowed_moves,
+            "scoresheet": {"viewer_color": "white", "turns": []},
+        }
+        payload = bot.build_turn_snapshot_payload(state)
+        system_prompt = bot.build_system_prompt("berkeley_any")
+
+        self.assertEqual(payload["target_count"], 10)
+        self.assertIn("Return exactly target_count", system_prompt)
+        self.assertNotIn("Return up to target_count", system_prompt)
+
     def test_turn_snapshot_payload_includes_rule_specific_public_context(self) -> None:
         cincinnati_payload = bot.build_turn_snapshot_payload(
             {

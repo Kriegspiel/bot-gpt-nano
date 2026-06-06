@@ -545,7 +545,7 @@ def build_system_prompt(rule_variant: str) -> str:
         "You are a strong Kriegspiel player.\n"
         "Use only the provided private information and legal actions.\n"
         "Do not invent moves. Do not suggest illegal actions.\n"
-        "Return up to target_count unique JSON candidate actions ordered strictly from best to worst priority.\n"
+        "Return exactly target_count unique JSON candidate actions ordered strictly from best to worst priority.\n"
         "Candidate 1 must be your best choice, candidate 2 your next-best choice, and so on.\n"
         "Prioritize strategically strong, tactically sound moves that are robust under uncertainty.\n"
         "If action=move, uci must exactly match one allowed_moves item.\n"
@@ -600,7 +600,8 @@ def build_turn_snapshot_payload(
     allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
     possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
     max_prompt_turns = int(os.environ.get("OPENAI_MAX_PROMPT_TURNS", "10"))
-    target_count = min(model_batch_size(), max(len(allowed_moves), 1 if "ask_any" in possible_actions else 0))
+    available_action_count = len(allowed_moves) + (1 if "ask_any" in possible_actions else 0)
+    target_count = min(model_batch_size(), available_action_count)
     payload: dict[str, Any] = {
         "your_color": state.get("your_color"),
         "turn": state.get("turn"),
