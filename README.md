@@ -5,10 +5,11 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 ## What it does
 
 - registers as a listed Kriegspiel bot
+- syncs its supported rulesets with the API on startup
 - polls assigned games from the live API
 - does not create waiting lobby games by default
 - can join another bot's waiting lobby game with 0.1% probability while still under its active-game cap
-- builds a prompt from the current rule variant, private FEN, legal actions, and private scoresheet
+- builds a stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
 - asks an OpenAI model for the top ranked next actions in strict JSON
 - validates the model output against the server-provided legal actions
 - resigns instead of asking the model once the server-reported move number reaches 256
@@ -27,21 +28,16 @@ python bot.py --register
 python bot.py
 ```
 
-The bot reads the live rules text from the sibling `ks-content` repository:
-
-- `ks-content/rules/berkeley.md`
-- `ks-content/rules/README.md`
-
-Set `KRIEGSPIEL_CONTENT_RULES_DIR` to override that rules directory.
+The bot uses dedicated prompt summaries in `ruleset_summaries/*.md`, derived from the canonical `ks-content/rules` docs.
 
 By default the registration email is `bot-gpt-nano@kriegspiel.org`.
 
 By default the bot does not create open lobby games on its own. That behavior is controlled with:
 
 - `KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME=true|false`
-- `KRIEGSPIEL_AUTO_CREATE_RULE_VARIANT=berkeley|berkeley_any`
+- `KRIEGSPIEL_AUTO_CREATE_RULE_VARIANT=berkeley|berkeley_any|cincinnati|wild16|rand|english|crazykrieg`
 - `KRIEGSPIEL_AUTO_CREATE_PLAY_AS=white|black|random`
-- `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any`
+- `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any,cincinnati,wild16,rand,english,crazykrieg`
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
 - `KRIEGSPIEL_RESIGN_AFTER_MOVE_NUMBER=256`
 
@@ -56,12 +52,13 @@ Bot-vs-bot play is also enabled by default:
 
 OpenAI prompting defaults:
 
-- system prompt carries the rules and overall Kriegspiel scene
-- user prompt carries private scoresheet history, recent referee items, legal actions, and retry feedback
-- the bot asks for the top 10 ranked candidate actions by default
+- system prompt carries a ruleset-specific summary from `ruleset_summaries/*.md` and the overall Kriegspiel scene
+- user prompt is stateless and carries private FEN, ruleset-specific public material/reserves, at least the last 10 scorecard turns when available, legal actions, and retry feedback
+- the bot asks for exactly the top 10 ranked candidate actions by default when 10 legal actions exist
 - if a batch fails, it asks the model for the next batch of candidates
 - defaults can be tuned with:
   - `OPENAI_MODEL=gpt-5.4-nano`
+  - `OPENAI_MAX_PROMPT_TURNS=10` (values below 10 are clamped to 10)
   - `OPENAI_MODEL_BATCH_SIZE=10`
   - `OPENAI_MAX_BATCHES_PER_TURN=5`
   - `OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS=60`

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-import tempfile
+import json
 import unittest
 from unittest import mock
 
@@ -12,16 +11,17 @@ class BotTests(unittest.TestCase):
     def setUp(self) -> None:
         bot._OPENAI_PREFLIGHT_CACHE.update({"ready": None, "expires_at": 0.0, "reason": "unchecked"})
         bot._MODEL_AVAILABILITY_REPORT_CACHE.update({"ready": None, "reason": "", "reported_at": 0.0})
+        bot.load_ruleset_summary.cache_clear()
 
     def test_normalize_ranked_decisions_filters_invalid_and_duplicates(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
         decisions = bot.normalize_ranked_decisions(
             {
                 "candidates": [
-                    {"action": "move", "uci": "E2E4", "reason": "center"},
-                    {"action": "move", "uci": "e2e4", "reason": "duplicate"},
-                    {"action": "move", "uci": "a2a4", "reason": "illegal"},
-                    {"action": "ask_any", "uci": None, "reason": "question"},
+                    {"action": "move", "uci": "E2E4"},
+                    {"action": "move", "uci": "e2e4"},
+                    {"action": "move", "uci": "a2a4"},
+                    {"action": "ask_any", "uci": None},
                 ]
             },
             state,
@@ -44,10 +44,10 @@ class BotTests(unittest.TestCase):
         self.assertEqual(decision, {"action": "ask_any", "uci": None})
 
     def test_extract_response_text_reads_nested_output(self) -> None:
-        payload = {"output": [{"content": [{"text": "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\",\"reason\":\"center\"}]}"}]}]}
+        payload = {"output": [{"content": [{"text": "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\"}]}"}]}]}
         self.assertEqual(
             bot.extract_response_text(payload),
-            "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\",\"reason\":\"center\"}]}",
+            "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\"}]}",
         )
 
     def test_fallback_prefers_center_moves(self) -> None:
@@ -84,14 +84,6 @@ class BotTests(unittest.TestCase):
         clear_conversation_state.assert_called_once_with("gid1")
         choose_ranked_actions.assert_not_called()
 
-    def test_default_content_dir_uses_ks_content_rules(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            base_dir = Path(temp_dir) / "bot-gpt-nano"
-            canonical_rules = Path(temp_dir) / "ks-content" / "rules"
-            base_dir.mkdir()
-            with mock.patch.object(bot, "BASE_DIR", base_dir):
-                self.assertEqual(bot.default_content_dir(), canonical_rules)
-
     def test_build_prompts_split_rules_and_state(self) -> None:
         state = {
             "rule_variant": "berkeley_any",
@@ -102,7 +94,16 @@ class BotTests(unittest.TestCase):
             "your_fen": "fen",
             "possible_actions": ["move"],
             "allowed_moves": ["e2e4"],
-            "scoresheet": {"viewer_color": "white", "turns": []},
+            "material_summary": {
+                "white": {"pieces_remaining": 16, "pawns_captured": None},
+                "black": {"pieces_remaining": 15, "pawns_captured": None},
+            },
+            "scoresheet": {
+                "viewer_color": "white",
+                "turns": [
+                    {"turn": 1, "white": [{"move_uci": "e2e4", "message": "Move complete"}], "black": []},
+                ],
+            },
         }
         system_prompt = bot.build_system_prompt("berkeley_any")
         user_prompt = bot.build_initial_user_prompt(state)
@@ -112,13 +113,211 @@ class BotTests(unittest.TestCase):
             exclude_actions=[{"action": "move", "uci": "e2e4"}],
             recent_updates=["Turn 3 black: Illegal move"],
         )
-        self.assertIn("Rules and setting", system_prompt)
+        self.assertIn("Berkeley + Any", system_prompt)
+        self.assertNotIn("I. Introduction", system_prompt)
         self.assertIn("\"private_board_fen\":\"fen\"", user_prompt)
-        self.assertIn("\"phase\":\"initial_turn_snapshot\"", user_prompt)
+        self.assertNotIn("rule_variant", user_prompt)
+        self.assertNotIn("pawns_captured", user_prompt)
+        self.assertIn("\"material\":{\"black\":{\"pieces_remaining\":15},\"white\":{\"pieces_remaining\":16}}", user_prompt)
+        self.assertIn("\"recent_turns\":[{\"black\":[],\"turn\":1,\"white\":[\"[e2e4] Move complete\"]}]", user_prompt)
         self.assertIn("Rejected move e2e4: Illegal move", followup_prompt)
-        self.assertIn("Turn 3 black: Illegal move", followup_prompt)
-        self.assertIn("\"already_tried_this_turn\":[\"e2e4\"]", followup_prompt)
-        self.assertIn("ordered from best to worse priority", followup_prompt)
+        self.assertIn("\"rejected_this_turn\":[\"e2e4\"]", followup_prompt)
+
+    def test_ruleset_summary_files_cover_supported_variants(self) -> None:
+        summary_files = {path.stem for path in bot.RULESET_SUMMARY_DIR.glob("*.md")}
+        self.assertEqual(summary_files, set(bot.SUPPORTED_RULE_VARIANTS))
+        required_concepts = ["illegal", "capture", "check", "pawn", "promotion", "stalemate"]
+        checklist_labels = [
+            "Referee response to illegal tries:",
+            "Capture announcements:",
+            "Check announcements:",
+            "Pawn-capture / Any? handling:",
+            "Promotion announcements:",
+            "Stalemate:",
+        ]
+        for variant in bot.SUPPORTED_RULE_VARIANTS:
+            summary = bot.load_ruleset_summary(variant)
+            normalized = summary.lower()
+            self.assertGreaterEqual(len(summary.split()), 90)
+            self.assertLessEqual(len(summary.split()), 190)
+            self.assertFalse(any(line.startswith("- ") for line in summary.splitlines()))
+            for label in checklist_labels:
+                self.assertNotIn(label, summary)
+            for concept in required_concepts:
+                self.assertIn(concept, normalized)
+
+        rand_summary = bot.load_ruleset_summary("rand")
+        self.assertIn("promotions are announced in rand, but not the promoted piece type", rand_summary.lower())
+        self.assertIn("the stalemated player loses in rand", rand_summary.lower())
+
+    def test_build_system_prompt_uses_ruleset_summary_file(self) -> None:
+        summary = bot.load_ruleset_summary("wild16")
+        system_prompt = bot.build_system_prompt("wild16")
+        self.assertIn("illegal tries private", summary)
+        self.assertIn(summary, system_prompt)
+        self.assertNotIn("Cincinnati", system_prompt)
+
+    def test_turn_snapshot_requests_exact_batch_when_enough_actions_exist(self) -> None:
+        allowed_moves = ["a2a3", "b2b3", "c2c3", "d2d3", "e2e3", "f2f3", "g2g3", "h2h3", "b1c3"]
+        state = {
+            "rule_variant": "berkeley_any",
+            "your_color": "white",
+            "turn": "white",
+            "move_number": 1,
+            "your_fen": "fen",
+            "possible_actions": ["move", "ask_any"],
+            "allowed_moves": allowed_moves,
+            "scoresheet": {"viewer_color": "white", "turns": []},
+        }
+        payload = bot.build_turn_snapshot_payload(state)
+        system_prompt = bot.build_system_prompt("berkeley_any")
+
+        self.assertEqual(payload["target_count"], 10)
+        self.assertIn("Return exactly target_count", system_prompt)
+        self.assertNotIn("Return up to target_count", system_prompt)
+
+    def test_openai_max_prompt_turns_has_ten_turn_floor(self) -> None:
+        with mock.patch.dict("os.environ", {"OPENAI_MAX_PROMPT_TURNS": "5"}):
+            self.assertEqual(bot.openai_max_prompt_turns(), 10)
+        with mock.patch.dict("os.environ", {"OPENAI_MAX_PROMPT_TURNS": "12"}):
+            self.assertEqual(bot.openai_max_prompt_turns(), 12)
+        with mock.patch.dict("os.environ", {"OPENAI_MAX_PROMPT_TURNS": "invalid"}):
+            self.assertEqual(bot.openai_max_prompt_turns(), 10)
+
+    def test_turn_snapshot_includes_at_least_ten_recent_turns_when_available(self) -> None:
+        turns = [
+            {
+                "turn": turn_number,
+                "white": [{"move_uci": f"a{turn_number}a{turn_number + 1}", "message": "Move complete"}],
+                "black": [],
+            }
+            for turn_number in range(1, 13)
+        ]
+        state = {
+            "rule_variant": "berkeley_any",
+            "your_color": "white",
+            "turn": "white",
+            "move_number": 12,
+            "your_fen": "fen",
+            "possible_actions": ["move"],
+            "allowed_moves": ["e2e4"],
+            "scoresheet": {"viewer_color": "white", "turns": turns},
+        }
+
+        with mock.patch.dict("os.environ", {"OPENAI_MAX_PROMPT_TURNS": "5"}):
+            payload = bot.build_turn_snapshot_payload(state)
+
+        self.assertEqual(len(payload["recent_turns"]), 10)
+        self.assertEqual(payload["recent_turns"][0]["turn"], 3)
+        self.assertEqual(payload["recent_turns"][-1]["turn"], 12)
+
+    def test_turn_snapshot_payload_includes_rule_specific_public_context(self) -> None:
+        cincinnati_payload = bot.build_turn_snapshot_payload(
+            {
+                "rule_variant": "cincinnati",
+                "your_color": "black",
+                "turn": "black",
+                "move_number": 8,
+                "your_fen": "fen",
+                "possible_actions": ["move"],
+                "allowed_moves": ["g8f6"],
+                "material_summary": {
+                    "white": {"pieces_remaining": 16, "pawns_captured": 0},
+                    "black": {"pieces_remaining": 15, "pawns_captured": 1},
+                },
+                "reserve_summary": {
+                    "white": {"pawns": 0, "knights": 0, "bishops": 0, "rooks": 0, "queens": 0},
+                    "black": {"pawns": 0, "knights": 0, "bishops": 0, "rooks": 0, "queens": 0},
+                },
+                "scoresheet": {"viewer_color": "black", "turns": []},
+            }
+        )
+        self.assertEqual(
+            cincinnati_payload["material"],
+            {
+                "white": {"pieces_remaining": 16, "pawns_captured": 0},
+                "black": {"pieces_remaining": 15, "pawns_captured": 1},
+            },
+        )
+        self.assertNotIn("reserves", cincinnati_payload)
+
+        crazy_payload = bot.build_turn_snapshot_payload(
+            {
+                "rule_variant": "crazykrieg",
+                "your_color": "white",
+                "turn": "white",
+                "move_number": 9,
+                "your_fen": "fen",
+                "possible_actions": ["move", "ask_any"],
+                "allowed_moves": ["g1f3"],
+                "material_summary": {
+                    "white": {"pieces_remaining": 17, "pawns_captured": None},
+                    "black": {"pieces_remaining": 15, "pawns_captured": None},
+                },
+                "reserve_summary": {
+                    "white": {"pawns": 0, "knights": 1, "bishops": 0, "rooks": 0, "queens": 0},
+                    "black": {"pawns": 1, "knights": 0, "bishops": 0, "rooks": 0, "queens": 0},
+                },
+                "scoresheet": {"viewer_color": "white", "turns": []},
+            }
+        )
+        self.assertEqual(
+            crazy_payload["material"],
+            {"white": {"pieces_remaining": 17}, "black": {"pieces_remaining": 15}},
+        )
+        self.assertEqual(crazy_payload["reserves"]["white"]["knights"], 1)
+        self.assertEqual(crazy_payload["reserves"]["black"]["pawns"], 1)
+
+    def test_supported_rule_variants_default_to_all_playable_rulesets(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(bot.supported_rule_variants(), list(bot.SUPPORTED_RULE_VARIANTS))
+
+    def test_sync_bot_profile_posts_supported_rule_variants(self) -> None:
+        with mock.patch.object(bot, "post_json", return_value={"ok": True}) as post_json:
+            self.assertTrue(bot.sync_bot_profile())
+
+        post_json.assert_called_once_with(
+            "/bots/profile",
+            {"supported_rule_variants": list(bot.SUPPORTED_RULE_VARIANTS)},
+        )
+
+    def test_action_schema_does_not_request_unused_reasons(self) -> None:
+        candidate_schema = bot.action_schema()["schema"]["properties"]["candidates"]["items"]
+        self.assertNotIn("reason", candidate_schema["properties"])
+        self.assertEqual(candidate_schema["required"], ["action", "uci"])
+
+    def test_choose_ranked_actions_is_stateless(self) -> None:
+        state = {
+            "rule_variant": "berkeley_any",
+            "your_color": "white",
+            "turn": "white",
+            "move_number": 3,
+            "your_fen": "fen",
+            "possible_actions": ["move"],
+            "allowed_moves": ["e2e4"],
+            "material_summary": {
+                "white": {"pieces_remaining": 16, "pawns_captured": None},
+                "black": {"pieces_remaining": 16, "pawns_captured": None},
+            },
+            "scoresheet": {"viewer_color": "white", "turns": []},
+        }
+        raw_response = {
+            "id": "resp_1",
+            "output": [{"content": [{"text": json.dumps({"candidates": [{"action": "move", "uci": "e2e4"}]})}]}],
+            "usage": {"input_tokens": 100, "input_tokens_details": {"cached_tokens": 50}, "output_tokens": 20},
+        }
+        with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False):
+            with mock.patch.object(bot, "call_openai", return_value=raw_response) as call_openai:
+                decisions, source, response_id = bot.choose_ranked_actions(
+                    state,
+                    game_id="gid1",
+                    conversation={"response_id": "old-response"},
+                )
+
+        self.assertEqual(decisions, [{"action": "move", "uci": "e2e4"}])
+        self.assertEqual(source, "model")
+        self.assertIsNone(response_id)
+        self.assertNotIn("previous_response_id", call_openai.call_args.kwargs)
 
     def test_new_recent_items_returns_only_suffix_delta(self) -> None:
         previous = ["Turn 1 white: Move complete", "Turn 1 black: Illegal move"]
