@@ -126,28 +126,34 @@ class BotTests(unittest.TestCase):
     def test_ruleset_summary_files_cover_supported_variants(self) -> None:
         summary_files = {path.stem for path in bot.RULESET_SUMMARY_DIR.glob("*.md")}
         self.assertEqual(summary_files, set(bot.SUPPORTED_RULE_VARIANTS))
-        required_sections = [
-            "- Referee response to illegal tries:",
-            "- Capture announcements:",
-            "- Check announcements:",
-            "- Pawn-capture / Any? handling:",
-            "- Promotion announcements:",
-            "- Stalemate:",
+        required_concepts = ["illegal", "capture", "check", "pawn", "promotion", "stalemate"]
+        checklist_labels = [
+            "Referee response to illegal tries:",
+            "Capture announcements:",
+            "Check announcements:",
+            "Pawn-capture / Any? handling:",
+            "Promotion announcements:",
+            "Stalemate:",
         ]
         for variant in bot.SUPPORTED_RULE_VARIANTS:
             summary = bot.load_ruleset_summary(variant)
+            normalized = summary.lower()
             self.assertGreaterEqual(len(summary.split()), 90)
-            for section in required_sections:
-                self.assertIn(section, summary)
+            self.assertLessEqual(len(summary.split()), 190)
+            self.assertFalse(any(line.startswith("- ") for line in summary.splitlines()))
+            for label in checklist_labels:
+                self.assertNotIn(label, summary)
+            for concept in required_concepts:
+                self.assertIn(concept, normalized)
 
         rand_summary = bot.load_ruleset_summary("rand")
-        self.assertIn("promotions are announced in RAND, but not the promoted piece type", rand_summary)
-        self.assertIn("the stalemated player loses in RAND", rand_summary)
+        self.assertIn("promotions are announced in rand, but not the promoted piece type", rand_summary.lower())
+        self.assertIn("the stalemated player loses in rand", rand_summary.lower())
 
     def test_build_system_prompt_uses_ruleset_summary_file(self) -> None:
         summary = bot.load_ruleset_summary("wild16")
         system_prompt = bot.build_system_prompt("wild16")
-        self.assertIn("illegal move attempts are private", summary)
+        self.assertIn("illegal tries private", summary)
         self.assertIn(summary, system_prompt)
         self.assertNotIn("Cincinnati", system_prompt)
 
