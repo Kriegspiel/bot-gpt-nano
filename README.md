@@ -53,12 +53,12 @@ Bot-vs-bot play is also enabled by default:
 OpenAI prompting defaults:
 
 - system prompt carries a ruleset-specific summary from `ruleset_summaries/*.md` and the overall Kriegspiel scene
-- user prompt is stateless and carries private FEN, ruleset-specific public material/reserves, the last 10 scorecard turns, legal actions, and retry feedback
+- user prompt is stateless and carries private FEN, ruleset-specific public material/reserves, at least the last 10 scorecard turns when available, legal actions, and retry feedback
 - the bot asks for exactly the top 10 ranked candidate actions by default when 10 legal actions exist
 - if a batch fails, it asks the model for the next batch of candidates
 - defaults can be tuned with:
   - `OPENAI_MODEL=gpt-5.4-nano`
-  - `OPENAI_MAX_PROMPT_TURNS=10`
+  - `OPENAI_MAX_PROMPT_TURNS=10` (values below 10 are clamped to 10)
   - `OPENAI_MODEL_BATCH_SIZE=10`
   - `OPENAI_MAX_BATCHES_PER_TURN=5`
   - `OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS=60`

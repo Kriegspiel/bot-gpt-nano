@@ -156,6 +156,41 @@ class BotTests(unittest.TestCase):
         self.assertIn("Return exactly target_count", system_prompt)
         self.assertNotIn("Return up to target_count", system_prompt)
 
+    def test_openai_max_prompt_turns_has_ten_turn_floor(self) -> None:
+        with mock.patch.dict("os.environ", {"OPENAI_MAX_PROMPT_TURNS": "5"}):
+            self.assertEqual(bot.openai_max_prompt_turns(), 10)
+        with mock.patch.dict("os.environ", {"OPENAI_MAX_PROMPT_TURNS": "12"}):
+            self.assertEqual(bot.openai_max_prompt_turns(), 12)
+        with mock.patch.dict("os.environ", {"OPENAI_MAX_PROMPT_TURNS": "invalid"}):
+            self.assertEqual(bot.openai_max_prompt_turns(), 10)
+
+    def test_turn_snapshot_includes_at_least_ten_recent_turns_when_available(self) -> None:
+        turns = [
+            {
+                "turn": turn_number,
+                "white": [{"move_uci": f"a{turn_number}a{turn_number + 1}", "message": "Move complete"}],
+                "black": [],
+            }
+            for turn_number in range(1, 13)
+        ]
+        state = {
+            "rule_variant": "berkeley_any",
+            "your_color": "white",
+            "turn": "white",
+            "move_number": 12,
+            "your_fen": "fen",
+            "possible_actions": ["move"],
+            "allowed_moves": ["e2e4"],
+            "scoresheet": {"viewer_color": "white", "turns": turns},
+        }
+
+        with mock.patch.dict("os.environ", {"OPENAI_MAX_PROMPT_TURNS": "5"}):
+            payload = bot.build_turn_snapshot_payload(state)
+
+        self.assertEqual(len(payload["recent_turns"]), 10)
+        self.assertEqual(payload["recent_turns"][0]["turn"], 3)
+        self.assertEqual(payload["recent_turns"][-1]["turn"], 12)
+
     def test_turn_snapshot_payload_includes_rule_specific_public_context(self) -> None:
         cincinnati_payload = bot.build_turn_snapshot_payload(
             {

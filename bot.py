@@ -39,6 +39,7 @@ BOT_GAME_PICK_PROBABILITY = 0.001
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
 DEFAULT_RESIGN_AFTER_MOVE_NUMBER = 256
+DEFAULT_OPENAI_MAX_PROMPT_TURNS = 10
 DEFAULT_OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
@@ -472,6 +473,14 @@ def max_model_batches_per_turn() -> int:
         return DEFAULT_MAX_MODEL_BATCHES_PER_TURN
 
 
+def openai_max_prompt_turns() -> int:
+    raw = os.environ.get("OPENAI_MAX_PROMPT_TURNS", str(DEFAULT_OPENAI_MAX_PROMPT_TURNS)).strip()
+    try:
+        return max(DEFAULT_OPENAI_MAX_PROMPT_TURNS, int(raw))
+    except ValueError:
+        return DEFAULT_OPENAI_MAX_PROMPT_TURNS
+
+
 def resign_after_move_number() -> int:
     raw = os.environ.get("KRIEGSPIEL_RESIGN_AFTER_MOVE_NUMBER", str(DEFAULT_RESIGN_AFTER_MOVE_NUMBER)).strip()
     try:
@@ -599,7 +608,6 @@ def build_turn_snapshot_payload(
     scoresheet = state.get("scoresheet") if isinstance(state.get("scoresheet"), dict) else {}
     allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
     possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
-    max_prompt_turns = int(os.environ.get("OPENAI_MAX_PROMPT_TURNS", "10"))
     available_action_count = len(allowed_moves) + (1 if "ask_any" in possible_actions else 0)
     target_count = min(model_batch_size(), available_action_count)
     payload: dict[str, Any] = {
@@ -608,7 +616,7 @@ def build_turn_snapshot_payload(
         "move_number": state.get("move_number"),
         "private_board_fen": state.get("your_fen"),
         "material": _prompt_material_summary(state),
-        "recent_turns": recent_scoresheet_turns(scoresheet, max_turns=max_prompt_turns),
+        "recent_turns": recent_scoresheet_turns(scoresheet, max_turns=openai_max_prompt_turns()),
         "possible_actions": possible_actions,
         "allowed_moves": allowed_moves,
         "target_count": target_count,
