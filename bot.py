@@ -19,6 +19,7 @@ import os
 import random
 import re
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 STATE_PATH = BASE_DIR / ".bot-state.json"
 ENV_PATH = BASE_DIR / ".env"
+RULESET_SUMMARY_DIR = BASE_DIR / "ruleset_summaries"
 
 
 DEFAULT_TIMEOUT_SECONDS = 20
@@ -42,46 +44,6 @@ DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
 SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")
 DEFAULT_SUPPORTED_RULE_VARIANTS = ",".join(SUPPORTED_RULE_VARIANTS)
-RULESET_SUMMARIES = {
-    "berkeley": (
-        "Berkeley: hidden opponent board, normal chess legality. Illegal attempts are private to the mover. "
-        "Public referee information after legal moves: capture square, check direction, mate/stalemate. "
-        "Captured piece identity, promotion, castling, and en passant identity are not announced. No ask_any action."
-    ),
-    "berkeley_any": (
-        "Berkeley + Any: hidden opponent board, normal chess legality. Illegal attempts are private to the mover. "
-        "Public referee information after legal moves: capture square, check direction, mate/stalemate. "
-        "Captured piece identity, promotion, castling, and en passant identity are not announced. "
-        "The ask_any action asks whether any legal pawn capture exists. If the referee says there are pawn captures, "
-        "the player must complete a legal pawn capture on that turn."
-    ),
-    "cincinnati": (
-        "Cincinnati: hidden opponent board, normal chess tries until a legal move stands. Illegal/Nonsense tries are public. "
-        "Before turns, public pawn-capture availability may be announced. Legal captures announce square and whether the captured man was pawn or piece. "
-        "Checks announce direction. Promotions and castling are not announced."
-    ),
-    "wild16": (
-        "Wild 16: hidden opponent board, normal chess. Illegal attempts are private to the mover. "
-        "Before turns, the referee publicly announces the count of legal pawn captures as pawn tries. "
-        "Captures announce square and pawn-vs-piece identity; checks announce direction. Promotion and castling are not announced."
-    ),
-    "rand": (
-        "RAND: hidden opponent board, normal chess with public rebuffs/no answers. "
-        "Before turns, the referee announces source squares for pawns with legal capture tries. "
-        "Captures announce square and pawn-vs-piece identity; checks announce direction; promotions are publicly announced. Stalemate is a loss."
-    ),
-    "english": (
-        "English: hidden opponent board, normal chess legality. Illegal moves are announced and must be retracted. "
-        "Captures announce the capture square but not captured identity; en passant is announced explicitly. Checks announce direction. "
-        "ask_any asks whether any pawn capture exists; after a positive answer, one pawn capture must be tried, and if that try is illegal any legal move may follow."
-    ),
-    "crazykrieg": (
-        "CrazyKrieg: hidden opponent board plus Crazyhouse reserves. Players may make normal chess moves or legal reserve drops. "
-        "Both reserves are public; drop piece type is public but drop square is hidden unless later revealed by announcements. "
-        "Captures announce square and exact reserve identity of the captured unit; promoted pawns enter reserve as pawns. "
-        "Checks announce direction. ask_any checks visible pawns for legal captures; after a positive answer, one pawn capture must be tried, and if that try is illegal any legal move may follow."
-    ),
-}
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
@@ -571,8 +533,14 @@ def new_recent_items(previous: list[str], current: list[str]) -> list[str]:
     return current[best_overlap:]
 
 
+@lru_cache(maxsize=len(SUPPORTED_RULE_VARIANTS) + 1)
+def load_ruleset_summary(rule_variant: str) -> str:
+    variant = rule_variant if rule_variant in SUPPORTED_RULE_VARIANTS else "berkeley_any"
+    return (RULESET_SUMMARY_DIR / f"{variant}.md").read_text(encoding="utf-8").strip()
+
+
 def build_system_prompt(rule_variant: str) -> str:
-    rules_summary = RULESET_SUMMARIES.get(rule_variant, RULESET_SUMMARIES["berkeley_any"])
+    rules_summary = load_ruleset_summary(rule_variant)
     return (
         "You are a strong Kriegspiel player.\n"
         "Use only the provided private information and legal actions.\n"

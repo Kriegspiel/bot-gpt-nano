@@ -11,6 +11,7 @@ class BotTests(unittest.TestCase):
     def setUp(self) -> None:
         bot._OPENAI_PREFLIGHT_CACHE.update({"ready": None, "expires_at": 0.0, "reason": "unchecked"})
         bot._MODEL_AVAILABILITY_REPORT_CACHE.update({"ready": None, "reason": "", "reported_at": 0.0})
+        bot.load_ruleset_summary.cache_clear()
 
     def test_normalize_ranked_decisions_filters_invalid_and_duplicates(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
@@ -121,6 +122,20 @@ class BotTests(unittest.TestCase):
         self.assertIn("\"recent_turns\":[{\"black\":[],\"turn\":1,\"white\":[\"[e2e4] Move complete\"]}]", user_prompt)
         self.assertIn("Rejected move e2e4: Illegal move", followup_prompt)
         self.assertIn("\"rejected_this_turn\":[\"e2e4\"]", followup_prompt)
+
+    def test_ruleset_summary_files_cover_supported_variants(self) -> None:
+        summary_files = {path.stem for path in bot.RULESET_SUMMARY_DIR.glob("*.md")}
+        self.assertEqual(summary_files, set(bot.SUPPORTED_RULE_VARIANTS))
+        for variant in bot.SUPPORTED_RULE_VARIANTS:
+            summary = bot.load_ruleset_summary(variant)
+            self.assertGreaterEqual(len(summary.split()), 90)
+
+    def test_build_system_prompt_uses_ruleset_summary_file(self) -> None:
+        summary = bot.load_ruleset_summary("wild16")
+        system_prompt = bot.build_system_prompt("wild16")
+        self.assertIn("Wild 16 keeps illegal move attempts private", summary)
+        self.assertIn(summary, system_prompt)
+        self.assertNotIn("Cincinnati", system_prompt)
 
     def test_turn_snapshot_payload_includes_rule_specific_public_context(self) -> None:
         cincinnati_payload = bot.build_turn_snapshot_payload(

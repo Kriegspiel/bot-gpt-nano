@@ -9,7 +9,7 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - polls assigned games from the live API
 - does not create waiting lobby games by default
 - can join another bot's waiting lobby game with 0.1% probability while still under its active-game cap
-- builds a stateless prompt from a compact ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
+- builds a stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
 - asks an OpenAI model for the top ranked next actions in strict JSON
 - validates the model output against the server-provided legal actions
 - resigns instead of asking the model once the server-reported move number reaches 256
@@ -28,7 +28,7 @@ python bot.py --register
 python bot.py
 ```
 
-The bot uses compact embedded ruleset summaries derived from the canonical `ks-content/rules` docs.
+The bot uses dedicated prompt summaries in `ruleset_summaries/*.md`, derived from the canonical `ks-content/rules` docs.
 
 By default the registration email is `bot-gpt-nano@kriegspiel.org`.
 
@@ -52,7 +52,7 @@ Bot-vs-bot play is also enabled by default:
 
 OpenAI prompting defaults:
 
-- system prompt carries a compact ruleset-specific summary and the overall Kriegspiel scene
+- system prompt carries a ruleset-specific summary from `ruleset_summaries/*.md` and the overall Kriegspiel scene
 - user prompt is stateless and carries private FEN, ruleset-specific public material/reserves, the last 10 scorecard turns, legal actions, and retry feedback
 - the bot asks for the top 10 ranked candidate actions by default
 - if a batch fails, it asks the model for the next batch of candidates
