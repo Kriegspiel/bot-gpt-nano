@@ -272,6 +272,14 @@ class BotTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {}, clear=True):
             self.assertEqual(bot.supported_rule_variants(), list(bot.SUPPORTED_RULE_VARIANTS))
 
+    def test_supported_rule_variants_expands_legacy_two_ruleset_default(self) -> None:
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_SUPPORTED_RULE_VARIANTS": "berkeley,berkeley_any"}):
+            self.assertEqual(bot.supported_rule_variants(), list(bot.SUPPORTED_RULE_VARIANTS))
+
+    def test_supported_rule_variants_respects_non_legacy_custom_subset(self) -> None:
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_SUPPORTED_RULE_VARIANTS": "wild16,crazykrieg"}):
+            self.assertEqual(bot.supported_rule_variants(), ["wild16", "crazykrieg"])
+
     def test_sync_bot_profile_posts_supported_rule_variants(self) -> None:
         with mock.patch.object(bot, "post_json", return_value={"ok": True}) as post_json:
             self.assertTrue(bot.sync_bot_profile())
@@ -389,11 +397,12 @@ class BotTests(unittest.TestCase):
                 [
                     {"game_code": "BER123", "created_by": "randobot", "rule_variant": "berkeley"},
                     {"game_code": "ANY123", "created_by": "randobot", "rule_variant": "berkeley_any"},
+                    {"game_code": "CIN123", "created_by": "randobot", "rule_variant": "cincinnati"},
                 ],
                 profile_lookup=lambda username: {"role": "bot"},
             )
 
-        self.assertEqual([game["game_code"] for game in candidates], ["BER123", "ANY123"])
+        self.assertEqual([game["game_code"] for game in candidates], ["BER123", "ANY123", "CIN123"])
 
     def test_choose_bot_game_to_join_returns_candidate(self) -> None:
         games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]

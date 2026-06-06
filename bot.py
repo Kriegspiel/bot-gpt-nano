@@ -45,6 +45,7 @@ DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
 SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")
 DEFAULT_SUPPORTED_RULE_VARIANTS = ",".join(SUPPORTED_RULE_VARIANTS)
+LEGACY_DEFAULT_SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
@@ -283,6 +284,8 @@ def supported_rule_variants() -> list[str]:
         value = item.strip()
         if value in SUPPORTED_RULE_VARIANTS and value not in variants:
             variants.append(value)
+    if tuple(variants) == LEGACY_DEFAULT_SUPPORTED_RULE_VARIANTS:
+        return list(SUPPORTED_RULE_VARIANTS)
     return variants or list(SUPPORTED_RULE_VARIANTS)
 
 
