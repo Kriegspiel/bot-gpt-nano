@@ -294,6 +294,15 @@ class BotTests(unittest.TestCase):
         self.assertNotIn("reason", candidate_schema["properties"])
         self.assertEqual(candidate_schema["required"], ["action", "uci"])
 
+    def test_openai_usage_cost_usd_accounts_for_cached_input(self) -> None:
+        usage = {
+            "input_tokens": 1000,
+            "input_tokens_details": {"cached_tokens": 400},
+            "output_tokens": 20,
+        }
+
+        self.assertAlmostEqual(bot.openai_usage_cost_usd(usage), 0.000153)
+
     def test_choose_ranked_actions_is_stateless(self) -> None:
         state = {
             "rule_variant": "berkeley_any",
@@ -326,6 +335,43 @@ class BotTests(unittest.TestCase):
         self.assertEqual(source, "model")
         self.assertIsNone(response_id)
         self.assertNotIn("previous_response_id", call_openai.call_args.kwargs)
+
+    def test_choose_ranked_actions_logs_usage_before_parse_failure(self) -> None:
+        state = {
+            "rule_variant": "berkeley_any",
+            "your_color": "white",
+            "turn": "white",
+            "move_number": 3,
+            "your_fen": "fen",
+            "possible_actions": ["move"],
+            "allowed_moves": ["e2e4"],
+            "scoresheet": {"viewer_color": "white", "turns": []},
+        }
+        raw_response = {
+            "id": "resp_1",
+            "output": [{"content": [{"text": "not json"}]}],
+            "usage": {
+                "input_tokens": 1000,
+                "input_tokens_details": {"cached_tokens": 400},
+                "output_tokens": 20,
+            },
+        }
+
+        with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False):
+            with mock.patch.object(bot, "call_openai", return_value=raw_response):
+                with self.assertLogs(bot.logger, level="INFO") as logs:
+                    decisions, source, response_id = bot.choose_ranked_actions(state, game_id="gid1")
+
+        self.assertEqual(decisions, [{"action": "move", "uci": "e2e4"}])
+        self.assertEqual(source, "fallback")
+        self.assertIsNone(response_id)
+        log_output = "\n".join(logs.output)
+        self.assertIn("provider=openai", log_output)
+        self.assertIn("response_id=resp_1", log_output)
+        self.assertIn("input_tokens=1000", log_output)
+        self.assertIn("cached_input_tokens=400", log_output)
+        self.assertIn("output_tokens=20", log_output)
+        self.assertIn("cost_usd=0.000153", log_output)
 
     def test_new_recent_items_returns_only_suffix_delta(self) -> None:
         previous = ["Turn 1 white: Move complete", "Turn 1 black: Illegal move"]
