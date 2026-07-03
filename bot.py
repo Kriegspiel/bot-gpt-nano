@@ -43,6 +43,10 @@ DEFAULT_OPENAI_MAX_PROMPT_TURNS = 10
 DEFAULT_OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
+USD_PER_MILLION_TOKENS = 1_000_000
+OPENAI_GPT_NANO_INPUT_USD_PER_MILLION_TOKENS = 0.20
+OPENAI_GPT_NANO_CACHED_INPUT_USD_PER_MILLION_TOKENS = 0.02
+OPENAI_GPT_NANO_OUTPUT_USD_PER_MILLION_TOKENS = 1.25
 SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")
 DEFAULT_SUPPORTED_RULE_VARIANTS = ",".join(SUPPORTED_RULE_VARIANTS)
 LEGACY_DEFAULT_SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any")
@@ -108,6 +112,54 @@ def model_availability_report_interval_seconds() -> float:
         return max(5.0, float(raw))
     except ValueError:
         return DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS
+
+
+def usage_token_count(usage: dict[str, Any], key: str) -> int:
+    value = usage.get(key)
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def openai_cached_input_tokens(usage: dict[str, Any]) -> int:
+    input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
+    return usage_token_count(input_details, "cached_tokens")
+
+
+def openai_usage_cost_usd(usage: dict[str, Any]) -> float:
+    input_tokens = usage_token_count(usage, "input_tokens")
+    cached_tokens = min(openai_cached_input_tokens(usage), input_tokens)
+    uncached_input_tokens = max(0, input_tokens - cached_tokens)
+    output_tokens = usage_token_count(usage, "output_tokens")
+    return (
+        uncached_input_tokens * OPENAI_GPT_NANO_INPUT_USD_PER_MILLION_TOKENS
+        + cached_tokens * OPENAI_GPT_NANO_CACHED_INPUT_USD_PER_MILLION_TOKENS
+        + output_tokens * OPENAI_GPT_NANO_OUTPUT_USD_PER_MILLION_TOKENS
+    ) / USD_PER_MILLION_TOKENS
+
+
+def log_openai_usage(*, game_id: str, model: str, payload: dict[str, Any]) -> None:
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    input_tokens = usage_token_count(usage, "input_tokens")
+    cached_tokens = min(openai_cached_input_tokens(usage), input_tokens)
+    output_tokens = usage_token_count(usage, "output_tokens")
+    response_id = str(payload.get("id") or "")
+    logger.info(
+        (
+            "%s: model usage provider=openai model=%s response_id=%s "
+            "input_tokens=%s cached_input_tokens=%s output_tokens=%s cost_usd=%.6f"
+        ),
+        game_id,
+        model,
+        response_id,
+        input_tokens,
+        cached_tokens,
+        output_tokens,
+        openai_usage_cost_usd(usage),
+    )
 
 
 def auth_headers() -> dict[str, str]:
@@ -935,16 +987,12 @@ def choose_ranked_actions(
             user_prompt=user_prompt,
             prompt_cache_key=f"kriegspiel-bot-gpt-nano:{game_id}",
         )
-        decisions = normalize_ranked_decisions(parse_model_decision(raw_response), state)
-        usage = raw_response.get("usage") if isinstance(raw_response.get("usage"), dict) else {}
-        input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
-        logger.debug(
-            "%s: model usage input_tokens=%s cached_tokens=%s output_tokens=%s",
-            game_id,
-            usage.get("input_tokens", 0),
-            input_details.get("cached_tokens", 0),
-            usage.get("output_tokens", 0),
+        log_openai_usage(
+            game_id=game_id,
+            model=os.environ.get("OPENAI_MODEL", "gpt-5.4-nano").strip(),
+            payload=raw_response,
         )
+        decisions = normalize_ranked_decisions(parse_model_decision(raw_response), state)
         if decisions:
             return decisions, "model", None
     except requests.RequestException as exc:
