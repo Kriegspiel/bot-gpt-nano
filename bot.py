@@ -114,6 +114,32 @@ def model_availability_report_interval_seconds() -> float:
         return DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS
 
 
+def env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def openai_input_usd_per_million_tokens() -> float:
+    return max(0.0, env_float("OPENAI_INPUT_USD_PER_MILLION_TOKENS", OPENAI_GPT_NANO_INPUT_USD_PER_MILLION_TOKENS))
+
+
+def openai_cached_input_usd_per_million_tokens() -> float:
+    return max(
+        0.0,
+        env_float(
+            "OPENAI_CACHED_INPUT_USD_PER_MILLION_TOKENS",
+            OPENAI_GPT_NANO_CACHED_INPUT_USD_PER_MILLION_TOKENS,
+        ),
+    )
+
+
+def openai_output_usd_per_million_tokens() -> float:
+    return max(0.0, env_float("OPENAI_OUTPUT_USD_PER_MILLION_TOKENS", OPENAI_GPT_NANO_OUTPUT_USD_PER_MILLION_TOKENS))
+
+
 def usage_token_count(usage: dict[str, Any], key: str) -> int:
     value = usage.get(key)
     if isinstance(value, bool):
@@ -135,9 +161,9 @@ def openai_usage_cost_usd(usage: dict[str, Any]) -> float:
     uncached_input_tokens = max(0, input_tokens - cached_tokens)
     output_tokens = usage_token_count(usage, "output_tokens")
     return (
-        uncached_input_tokens * OPENAI_GPT_NANO_INPUT_USD_PER_MILLION_TOKENS
-        + cached_tokens * OPENAI_GPT_NANO_CACHED_INPUT_USD_PER_MILLION_TOKENS
-        + output_tokens * OPENAI_GPT_NANO_OUTPUT_USD_PER_MILLION_TOKENS
+        uncached_input_tokens * openai_input_usd_per_million_tokens()
+        + cached_tokens * openai_cached_input_usd_per_million_tokens()
+        + output_tokens * openai_output_usd_per_million_tokens()
     ) / USD_PER_MILLION_TOKENS
 
 

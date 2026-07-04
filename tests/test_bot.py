@@ -315,6 +315,24 @@ class BotTests(unittest.TestCase):
 
         self.assertAlmostEqual(bot.openai_usage_cost_usd(usage), 0.000153)
 
+    def test_openai_usage_cost_usd_reads_pricing_env(self) -> None:
+        usage = {
+            "input_tokens": 1000,
+            "input_tokens_details": {"cached_tokens": 400},
+            "output_tokens": 20,
+        }
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "OPENAI_INPUT_USD_PER_MILLION_TOKENS": "0.40",
+                "OPENAI_CACHED_INPUT_USD_PER_MILLION_TOKENS": "0.04",
+                "OPENAI_OUTPUT_USD_PER_MILLION_TOKENS": "2.50",
+            },
+            clear=False,
+        ):
+            self.assertAlmostEqual(bot.openai_usage_cost_usd(usage), 0.000306)
+
     def test_choose_ranked_actions_is_stateless(self) -> None:
         state = {
             "rule_variant": "berkeley_any",
