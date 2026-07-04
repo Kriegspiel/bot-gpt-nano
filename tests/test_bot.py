@@ -16,11 +16,17 @@ class BotTests(unittest.TestCase):
     def test_normalize_ranked_decisions_filters_invalid_and_duplicates(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
         decisions = bot.normalize_ranked_decisions(
+            {"m": ["E2E4", "e2e4", "a2a4", "ask_any"]},
+            state,
+        )
+        self.assertEqual(decisions, [{"action": "move", "uci": "e2e4"}, {"action": "ask_any", "uci": None}])
+
+    def test_normalize_ranked_decisions_accepts_legacy_candidates(self) -> None:
+        state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
+        decisions = bot.normalize_ranked_decisions(
             {
                 "candidates": [
                     {"action": "move", "uci": "E2E4"},
-                    {"action": "move", "uci": "e2e4"},
-                    {"action": "move", "uci": "a2a4"},
                     {"action": "ask_any", "uci": None},
                 ]
             },
@@ -44,10 +50,10 @@ class BotTests(unittest.TestCase):
         self.assertEqual(decision, {"action": "ask_any", "uci": None})
 
     def test_extract_response_text_reads_nested_output(self) -> None:
-        payload = {"output": [{"content": [{"text": "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\"}]}"}]}]}
+        payload = {"output": [{"content": [{"text": "{\"m\":[\"e2e4\"]}"}]}]}
         self.assertEqual(
             bot.extract_response_text(payload),
-            "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\"}]}",
+            "{\"m\":[\"e2e4\"]}",
         )
 
     def test_fallback_prefers_center_moves(self) -> None:
@@ -115,6 +121,7 @@ class BotTests(unittest.TestCase):
         )
         self.assertIn("Berkeley + Any", system_prompt)
         self.assertNotIn("I. Introduction", system_prompt)
+        self.assertIn("{\"m\":[\"e2e4\",\"d2d4\",\"ask_any\"]}", system_prompt)
         self.assertIn("Return minified JSON", system_prompt)
         self.assertIn("Turn JSON keys: c=your color", system_prompt)
         self.assertIn("\"fen\":\"fen\"", user_prompt)
@@ -293,10 +300,11 @@ class BotTests(unittest.TestCase):
             {"supported_rule_variants": list(bot.SUPPORTED_RULE_VARIANTS)},
         )
 
-    def test_action_schema_does_not_request_unused_reasons(self) -> None:
-        candidate_schema = bot.action_schema()["schema"]["properties"]["candidates"]["items"]
-        self.assertNotIn("reason", candidate_schema["properties"])
-        self.assertEqual(candidate_schema["required"], ["action", "uci"])
+    def test_action_schema_uses_compact_move_list(self) -> None:
+        schema = bot.action_schema()["schema"]
+        self.assertEqual(schema["required"], ["m"])
+        self.assertNotIn("candidates", schema["properties"])
+        self.assertEqual(schema["properties"]["m"]["items"], {"type": "string"})
 
     def test_openai_usage_cost_usd_accounts_for_cached_input(self) -> None:
         usage = {
@@ -324,7 +332,7 @@ class BotTests(unittest.TestCase):
         }
         raw_response = {
             "id": "resp_1",
-            "output": [{"content": [{"text": json.dumps({"candidates": [{"action": "move", "uci": "e2e4"}]})}]}],
+            "output": [{"content": [{"text": json.dumps({"m": ["e2e4"]})}]}],
             "usage": {"input_tokens": 100, "input_tokens_details": {"cached_tokens": 50}, "output_tokens": 20},
         }
         with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False):

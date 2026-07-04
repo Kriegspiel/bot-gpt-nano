@@ -10,7 +10,7 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - does not create waiting lobby games by default
 - can join another bot's waiting lobby game with 0.1% probability while still under its active-game cap
 - builds a stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
-- asks an OpenAI model for the top ranked next actions in strict JSON
+- asks an OpenAI model for the top ranked next actions in compact strict JSON
 - validates the model output against the server-provided legal actions
 - resigns instead of asking the model once the server-reported move number reaches 256
 - checks OpenAI availability with a tiny cached preflight call before joining a new bot-vs-bot game
@@ -57,7 +57,7 @@ OpenAI prompting defaults:
 - system prompt carries a ruleset-specific summary from `ruleset_summaries/*.md` and the overall Kriegspiel scene
 - user prompt is stateless and uses the same compact turn keys as the Haiku bot for private FEN, public material/reserves, at least the last 10 scorecard turns when available, legal actions, and retry feedback
 - the bot asks for exactly the top 10 ranked candidate actions by default when 10 legal actions exist
-- if a batch fails, it asks the model for the next batch of candidates
+- if a batch fails, it asks the model for the next batch of compact move candidates
 - defaults can be tuned with:
   - `OPENAI_MODEL=gpt-5.4-nano`
   - `OPENAI_MAX_PROMPT_TURNS=10` (values below 10 are clamped to 10)
