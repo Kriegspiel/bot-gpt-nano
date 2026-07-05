@@ -454,7 +454,7 @@ class BotTests(unittest.TestCase):
         self.assertFalse(bot.should_create_lobby_game(games))
 
     def test_open_bot_lobby_candidates_only_include_other_bot_waiting_games(self) -> None:
-        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano"}):
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "llm_gptnano"}):
             candidates = bot.open_bot_lobby_candidates(
                 [
                     {
@@ -464,7 +464,7 @@ class BotTests(unittest.TestCase):
                     },
                     {
                         "game_code": "SELF12",
-                        "created_by": "gptnano",
+                        "created_by": "llm_gptnano",
                         "rule_variant": "berkeley_any",
                     },
                     {
@@ -479,7 +479,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual([game["game_code"] for game in candidates], ["BOT123"])
 
     def test_open_bot_lobby_candidates_respect_supported_rule_variants(self) -> None:
-        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano", "KRIEGSPIEL_SUPPORTED_RULE_VARIANTS": "berkeley,berkeley_any"}):
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "llm_gptnano", "KRIEGSPIEL_SUPPORTED_RULE_VARIANTS": "berkeley,berkeley_any"}):
             candidates = bot.open_bot_lobby_candidates(
                 [
                     {"game_code": "BER123", "created_by": "randobot", "rule_variant": "berkeley"},
@@ -494,7 +494,7 @@ class BotTests(unittest.TestCase):
     def test_choose_bot_game_to_join_returns_candidate(self) -> None:
         games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
 
-        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano"}):
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "llm_gptnano"}):
             with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
                 with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
                     self.assertEqual(bot.choose_bot_game_to_join(games, rng=bot.random)["game_code"], "BOT123")
@@ -558,8 +558,8 @@ class BotTests(unittest.TestCase):
         self.assertFalse(bot.should_join_bot_lobby_game(games))
 
     def test_has_own_waiting_game_detects_existing_lobby(self) -> None:
-        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano"}):
-            self.assertTrue(bot.has_own_waiting_game([{"game_code": "ABC123", "created_by": "gptnano"}]))
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "llm_gptnano"}):
+            self.assertTrue(bot.has_own_waiting_game([{"game_code": "ABC123", "created_by": "llm_gptnano"}]))
             self.assertFalse(bot.has_own_waiting_game([{"game_code": "XYZ789", "created_by": "randobot"}]))
 
     def test_openai_preflight_status_caches_success(self) -> None:

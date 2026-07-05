@@ -253,12 +253,12 @@ def register_bot() -> None:
     response = requests.post(
         f"{base_url()}/auth/bots/register",
         json={
-            "username": os.environ.get("KRIEGSPIEL_BOT_USERNAME", "gptnano"),
-            "display_name": os.environ.get("KRIEGSPIEL_BOT_DISPLAY_NAME", "GPT Nano"),
+            "username": os.environ.get("KRIEGSPIEL_BOT_USERNAME", "llm_gptnano"),
+            "display_name": os.environ.get("KRIEGSPIEL_BOT_DISPLAY_NAME", "LLM GPT-Nano (bot)"),
             "owner_email": os.environ.get("KRIEGSPIEL_BOT_OWNER_EMAIL", "bot-gpt-nano@kriegspiel.org"),
             "description": os.environ.get(
                 "KRIEGSPIEL_BOT_DESCRIPTION",
-                "Model-driven Kriegspiel bot that chooses moves using GPT nano model.",
+                "LLM GPT-Nano (bot) Kriegspiel model bot.",
             ),
             "listed": True,
             "supported_rule_variants": supported_rule_variants(),
@@ -1248,7 +1248,7 @@ def main() -> None:
     load_env_file()
     maybe_restore_token()
 
-    parser = argparse.ArgumentParser(description="Run the Kriegspiel GPT Nano bot.")
+    parser = argparse.ArgumentParser(description="Run the Kriegspiel LLM GPT-Nano (bot) runtime.")
     parser.add_argument("--register", action="store_true", help="Register the bot and persist the returned token.")
     parser.add_argument("--poll-seconds", type=float, default=3.0, help="Seconds between /game/mine/active polls.")
     args = parser.parse_args()
