@@ -44,12 +44,13 @@ DEFAULT_OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
 DEFAULT_BOT_USERNAME = "llm_gptnano"
-DEFAULT_BOT_DISPLAY_NAME = "LLM GPT-4.5 Nano (bot)"
-DEFAULT_BOT_DESCRIPTION = "LLM GPT-4.5 Nano (bot) Kriegspiel model bot."
+DEFAULT_BOT_DISPLAY_NAME = "LLM GPT-Nano (bot)"
+DEFAULT_BOT_DESCRIPTION = "LLM GPT-Nano (bot) Kriegspiel model bot."
 LEGACY_BOT_USERNAMES = {"gptnano", "llm_gpt45nano"}
-LEGACY_BOT_DISPLAY_NAMES = {"gpt nano", "llm gpt-nano (bot)"}
+LEGACY_BOT_DISPLAY_NAMES = {"gpt nano", "llm gpt-nano (bot)", "llm gpt-4.5 nano (bot)"}
 LEGACY_BOT_DESCRIPTIONS = {
     "llm gpt-nano (bot) kriegspiel model bot.",
+    "llm gpt-4.5 nano (bot) kriegspiel model bot.",
     "model-driven kriegspiel bot that chooses moves using gpt nano model.",
 }
 USD_PER_MILLION_TOKENS = 1_000_000
@@ -1298,7 +1299,7 @@ def main() -> None:
     load_env_file()
     maybe_restore_token()
 
-    parser = argparse.ArgumentParser(description="Run the Kriegspiel LLM GPT-4.5 Nano (bot) runtime.")
+    parser = argparse.ArgumentParser(description="Run the Kriegspiel LLM GPT-Nano (bot) runtime.")
     parser.add_argument("--register", action="store_true", help="Register the bot and persist the returned token.")
     parser.add_argument("--poll-seconds", type=float, default=3.0, help="Seconds between /game/mine/active polls.")
     args = parser.parse_args()

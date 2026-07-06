@@ -305,16 +305,16 @@ class BotTests(unittest.TestCase):
             "os.environ",
             {
                 "KRIEGSPIEL_BOT_USERNAME": "llm_gpt45nano",
-                "KRIEGSPIEL_BOT_DISPLAY_NAME": "LLM GPT-Nano (bot)",
-                "KRIEGSPIEL_BOT_DESCRIPTION": "LLM GPT-Nano (bot) Kriegspiel model bot.",
+                "KRIEGSPIEL_BOT_DISPLAY_NAME": "LLM GPT-4.5 Nano (bot)",
+                "KRIEGSPIEL_BOT_DESCRIPTION": "LLM GPT-4.5 Nano (bot) Kriegspiel model bot.",
             },
             clear=True,
         ):
             self.assertEqual(bot.bot_username(), "llm_gptnano")
-            self.assertEqual(bot.bot_display_name(), "LLM GPT-4.5 Nano (bot)")
-            self.assertEqual(bot.bot_description(), "LLM GPT-4.5 Nano (bot) Kriegspiel model bot.")
+            self.assertEqual(bot.bot_display_name(), "LLM GPT-Nano (bot)")
+            self.assertEqual(bot.bot_description(), "LLM GPT-Nano (bot) Kriegspiel model bot.")
 
-    def test_register_bot_defaults_to_gpt45_nano_display_name(self) -> None:
+    def test_register_bot_defaults_to_gpt_nano_display_name(self) -> None:
         response = mock.Mock()
         response.json.return_value = {"api_token": "token"}
         with mock.patch.dict("os.environ", {}, clear=True):
@@ -329,11 +329,11 @@ class BotTests(unittest.TestCase):
         )
         self.assertEqual(
             post.call_args.kwargs["json"]["display_name"],
-            "LLM GPT-4.5 Nano (bot)",
+            "LLM GPT-Nano (bot)",
         )
         self.assertEqual(
             post.call_args.kwargs["json"]["description"],
-            "LLM GPT-4.5 Nano (bot) Kriegspiel model bot.",
+            "LLM GPT-Nano (bot) Kriegspiel model bot.",
         )
         response.raise_for_status.assert_called_once_with()
         save_token.assert_called_once_with("token")
@@ -346,8 +346,8 @@ class BotTests(unittest.TestCase):
             "/bots/profile",
             {
                 "username": "llm_gptnano",
-                "display_name": "LLM GPT-4.5 Nano (bot)",
-                "description": "LLM GPT-4.5 Nano (bot) Kriegspiel model bot.",
+                "display_name": "LLM GPT-Nano (bot)",
+                "description": "LLM GPT-Nano (bot) Kriegspiel model bot.",
                 "supported_rule_variants": list(bot.SUPPORTED_RULE_VARIANTS),
             },
         )
