@@ -1,5 +1,5 @@
 [Unit]
-Description=Kriegspiel LLM GPT-Nano (bot) runtime
+Description=Kriegspiel LLM GPT-4.5 Nano (bot) runtime
 After=network-online.target
 Wants=network-online.target
 
