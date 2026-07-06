@@ -300,6 +300,26 @@ class BotTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"KRIEGSPIEL_SUPPORTED_RULE_VARIANTS": "wild16,crazykrieg"}):
             self.assertEqual(bot.supported_rule_variants(), ["wild16", "crazykrieg"])
 
+    def test_register_bot_defaults_to_gpt45_nano_display_name(self) -> None:
+        response = mock.Mock()
+        response.json.return_value = {"api_token": "token"}
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with mock.patch.object(bot.requests, "post", return_value=response) as post:
+                with mock.patch.object(bot, "save_token") as save_token:
+                    bot.register_bot()
+
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.kwargs["json"]["display_name"],
+            "LLM GPT-4.5 Nano (bot)",
+        )
+        self.assertEqual(
+            post.call_args.kwargs["json"]["description"],
+            "LLM GPT-4.5 Nano (bot) Kriegspiel model bot.",
+        )
+        response.raise_for_status.assert_called_once_with()
+        save_token.assert_called_once_with("token")
+
     def test_sync_bot_profile_posts_supported_rule_variants(self) -> None:
         with mock.patch.object(bot, "post_json", return_value={"ok": True}) as post_json:
             self.assertTrue(bot.sync_bot_profile())
