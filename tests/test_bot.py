@@ -342,6 +342,34 @@ class BotTests(unittest.TestCase):
         ):
             self.assertAlmostEqual(bot.openai_usage_cost_usd(usage), 0.000306)
 
+    def test_log_openai_usage_reports_backend_usage_when_token_configured(self) -> None:
+        payload = {
+            "id": "resp_1",
+            "usage": {"input_tokens": 1000, "input_tokens_details": {"cached_tokens": 400}, "output_tokens": 20},
+        }
+
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_TOKEN": "token"}, clear=False):
+            with mock.patch.object(bot, "post_json", return_value={"ok": True}) as post_json:
+                bot.log_openai_usage(game_id="gid1", model="gpt-nano", payload=payload)
+
+        post_json.assert_called_once()
+        path, usage_payload = post_json.call_args.args
+        self.assertEqual(path, "/bots/usage")
+        self.assertEqual(
+            usage_payload,
+            {
+                "game_id": "gid1",
+                "provider": "openai",
+                "model": "gpt-nano",
+                "response_id": "resp_1",
+                "input_tokens": 1000,
+                "cached_input_tokens": 400,
+                "output_tokens": 20,
+                "total_tokens": 1020,
+                "cost_usd": bot.openai_usage_cost_usd(payload["usage"]),
+            },
+        )
+
     def test_choose_ranked_actions_is_stateless(self) -> None:
         state = {
             "rule_variant": "berkeley_any",

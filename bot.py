@@ -173,6 +173,7 @@ def log_openai_usage(*, game_id: str, model: str, payload: dict[str, Any]) -> No
     cached_tokens = min(openai_cached_input_tokens(usage), input_tokens)
     output_tokens = usage_token_count(usage, "output_tokens")
     response_id = str(payload.get("id") or "")
+    cost_usd = openai_usage_cost_usd(usage)
     logger.info(
         (
             "%s: model usage provider=openai model=%s response_id=%s "
@@ -184,7 +185,20 @@ def log_openai_usage(*, game_id: str, model: str, payload: dict[str, Any]) -> No
         input_tokens,
         cached_tokens,
         output_tokens,
-        openai_usage_cost_usd(usage),
+        cost_usd,
+    )
+    report_model_usage(
+        {
+            "game_id": game_id,
+            "provider": "openai",
+            "model": model,
+            "response_id": response_id or None,
+            "input_tokens": input_tokens,
+            "cached_input_tokens": cached_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "cost_usd": cost_usd,
+        }
     )
 
 
@@ -301,6 +315,17 @@ def post_json(path: str, payload: dict[str, Any] | None = None) -> dict[str, Any
     )
     response.raise_for_status()
     return response.json()
+
+
+def report_model_usage(payload: dict[str, Any]) -> bool:
+    if not os.environ.get("KRIEGSPIEL_BOT_TOKEN", "").strip():
+        return False
+    try:
+        post_json("/bots/usage", payload)
+    except requests.RequestException as exc:
+        logger.warning("failed to report model usage: %s", exc)
+        return False
+    return True
 
 
 def report_model_availability(ready: bool, reason: str, *, force: bool = False) -> bool:
