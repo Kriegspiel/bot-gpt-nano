@@ -43,6 +43,15 @@ DEFAULT_OPENAI_MAX_PROMPT_TURNS = 10
 DEFAULT_OPENAI_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_OPENAI_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
+DEFAULT_BOT_USERNAME = "llm_gpt45nano"
+DEFAULT_BOT_DISPLAY_NAME = "LLM GPT-4.5 Nano (bot)"
+DEFAULT_BOT_DESCRIPTION = "LLM GPT-4.5 Nano (bot) Kriegspiel model bot."
+LEGACY_BOT_USERNAMES = {"gptnano", "llm_gptnano"}
+LEGACY_BOT_DISPLAY_NAMES = {"gpt nano", "llm gpt-nano (bot)"}
+LEGACY_BOT_DESCRIPTIONS = {
+    "llm gpt-nano (bot) kriegspiel model bot.",
+    "model-driven kriegspiel bot that chooses moves using gpt nano model.",
+}
 USD_PER_MILLION_TOKENS = 1_000_000
 OPENAI_GPT_NANO_INPUT_USD_PER_MILLION_TOKENS = 0.20
 OPENAI_GPT_NANO_CACHED_INPUT_USD_PER_MILLION_TOKENS = 0.02
@@ -208,7 +217,18 @@ def auth_headers() -> dict[str, str]:
 
 
 def bot_username() -> str:
-    return os.environ.get("KRIEGSPIEL_BOT_USERNAME", "").strip().lower()
+    username = os.environ.get("KRIEGSPIEL_BOT_USERNAME", DEFAULT_BOT_USERNAME).strip().lower()
+    return DEFAULT_BOT_USERNAME if username in LEGACY_BOT_USERNAMES else username
+
+
+def bot_display_name() -> str:
+    display_name = os.environ.get("KRIEGSPIEL_BOT_DISPLAY_NAME", DEFAULT_BOT_DISPLAY_NAME).strip()
+    return DEFAULT_BOT_DISPLAY_NAME if display_name.lower() in LEGACY_BOT_DISPLAY_NAMES else display_name
+
+
+def bot_description() -> str:
+    description = os.environ.get("KRIEGSPIEL_BOT_DESCRIPTION", DEFAULT_BOT_DESCRIPTION).strip()
+    return DEFAULT_BOT_DESCRIPTION if description.lower() in LEGACY_BOT_DESCRIPTIONS else description
 
 
 def load_state() -> dict[str, Any]:
@@ -267,13 +287,10 @@ def register_bot() -> None:
     response = requests.post(
         f"{base_url()}/auth/bots/register",
         json={
-            "username": os.environ.get("KRIEGSPIEL_BOT_USERNAME", "llm_gptnano"),
-            "display_name": os.environ.get("KRIEGSPIEL_BOT_DISPLAY_NAME", "LLM GPT-4.5 Nano (bot)"),
+            "username": bot_username(),
+            "display_name": bot_display_name(),
             "owner_email": os.environ.get("KRIEGSPIEL_BOT_OWNER_EMAIL", "bot-gpt-nano@kriegspiel.org"),
-            "description": os.environ.get(
-                "KRIEGSPIEL_BOT_DESCRIPTION",
-                "LLM GPT-4.5 Nano (bot) Kriegspiel model bot.",
-            ),
+            "description": bot_description(),
             "listed": True,
             "supported_rule_variants": supported_rule_variants(),
         },
@@ -287,7 +304,15 @@ def register_bot() -> None:
 
 def sync_bot_profile() -> bool:
     try:
-        post_json("/bots/profile", {"supported_rule_variants": supported_rule_variants()})
+        post_json(
+            "/bots/profile",
+            {
+                "username": bot_username(),
+                "display_name": bot_display_name(),
+                "description": bot_description(),
+                "supported_rule_variants": supported_rule_variants(),
+            },
+        )
     except requests.RequestException as exc:
         logger.warning("failed to sync bot profile: %s", exc)
         return False
