@@ -32,6 +32,26 @@ The bot uses dedicated prompt summaries in `ruleset_summaries/*.md`, derived fro
 
 By default the registration email is `bot-gpt-nano@kriegspiel.org`.
 
+## Multiple Model Instances
+
+Use separate env and state files when running one independent OpenAI bot per
+model:
+
+```bash
+python bot.py \
+  --env-file instances/gpt55.env \
+  --state-file instances/gpt55-state.json \
+  --register
+
+python bot.py \
+  --env-file instances/gpt55.env \
+  --state-file instances/gpt55-state.json
+```
+
+Each instance env must have its own Kriegspiel bot identity and `OPENAI_MODEL`.
+`ks-deploy bot-instance-bootstrap bot-gpt-nano ...` renders this shape for
+production instances.
+
 By default the bot does not create open lobby games on its own. That behavior is controlled with:
 
 - `KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME=true|false`
