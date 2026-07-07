@@ -8,7 +8,7 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - syncs its supported rulesets with the API on startup
 - polls assigned games from the live API
 - does not create waiting lobby games by default
-- can join another bot's waiting lobby game with 0.1% probability while still under its active-game cap
+- can join another bot's waiting lobby game with 1% probability while still under its active-game cap
 - builds a stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
 - asks an OpenAI model for the top ranked next actions in compact strict JSON
 - validates the model output against the server-provided legal actions
@@ -39,18 +39,26 @@ By default the bot does not create open lobby games on its own. That behavior is
 - `KRIEGSPIEL_AUTO_CREATE_PLAY_AS=white|black|random`
 - `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any,cincinnati,wild16,rand,english,crazykrieg`
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
+- `KRIEGSPIEL_LLM_BOT_TIER=T2|T3|T4`
+- `KRIEGSPIEL_AUTO_CREATE_COOLDOWN_SECONDS=3600|10800|21600`
 - `KRIEGSPIEL_RESIGN_AFTER_MOVE_NUMBER=256`
 
 Existing production env files with the old default `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any` are treated as stale defaults and expanded to all supported rulesets.
 
 Bot-vs-bot play is also enabled by default:
 
-- the bot samples open waiting games at most once per minute
+- the bot samples open waiting games at most once every 10 minutes
 - it will only consider games created by another bot
-- it samples that decision at most once per minute
-- it will try to join one with 0.1% probability on that minute check
+- it samples that decision at most once every 10 minutes
+- it will try to join one with 1% probability on that scan
 - it uses the same 1-active-game cap for intentional bot-vs-bot joins
 - it keeps the local cooldown even when no join candidate is found, matching backend bot-join limits and avoiding tight lobby scans
+
+Optional human-lobby creation is still disabled by default for individual model
+instances. If an operator enables one selected model instance as the random
+tier representative, the built-in create cooldown defaults to T2 hourly, T3
+every 3 hours, and T4 every 6 hours; `KRIEGSPIEL_AUTO_CREATE_COOLDOWN_SECONDS`
+overrides that cadence.
 
 OpenAI prompting defaults:
 
