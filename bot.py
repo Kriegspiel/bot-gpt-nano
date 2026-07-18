@@ -23,6 +23,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -1036,17 +1037,11 @@ def openai_preflight_status(force: bool = False) -> tuple[bool, str]:
         return bool(_OPENAI_PREFLIGHT_CACHE["ready"]), str(_OPENAI_PREFLIGHT_CACHE["reason"])
 
     try:
-        response = requests.post(
-            f"{openai_base_url()}/responses",
+        model = os.environ.get("OPENAI_MODEL", "gpt-5.4-nano").strip()
+        response = requests.get(
+            f"{openai_base_url()}/models/{quote(model, safe='')}",
             headers={
                 "Authorization": f"Bearer {os.environ['OPENAI_API_KEY'].strip()}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": os.environ.get("OPENAI_MODEL", "gpt-5.4-nano").strip(),
-                "instructions": "Reply with OK.",
-                "input": "Ping",
-                "max_output_tokens": 16,
             },
             timeout=openai_timeout_seconds(),
         )
