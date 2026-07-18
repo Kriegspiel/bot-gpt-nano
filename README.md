@@ -9,7 +9,8 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - runs one bot process per bot identity/model instance
 - polls assigned games from the main process and runs one lightweight runner thread per active game
 - does not create waiting lobby games by default
-- can join another bot's waiting lobby game with 1% probability while still under its active-game cap
+- can join another bot's waiting lobby game using its configured tier
+  probability while still under its active-game cap
 - builds a stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
 - asks an OpenAI model for the top ranked next actions in compact strict JSON
 - validates the model output against the server-provided legal actions
@@ -115,6 +116,16 @@ OpenAI prompting defaults:
   - `OPENAI_INPUT_USD_PER_MILLION_TOKENS=0.20`
   - `OPENAI_CACHED_INPUT_USD_PER_MILLION_TOKENS=0.02`
   - `OPENAI_OUTPUT_USD_PER_MILLION_TOKENS=1.25`
+  - `OPENAI_MONTHLY_BUDGET_USD=18`
+  - `OPENAI_MONTHLY_BUDGET_STATE_PATH=~/.local/state/kriegspiel/provider-budgets/openai.json`
+  - `PROVIDER_BUDGET_RESERVATION_TTL_SECONDS=1800`
+
+The monthly ledger is shared with every direct OpenAI bot process on the host,
+including OpenAI-provider instances from `bot-openai-compatible`. It reserves a
+conservative request cost before the provider call and settles from returned
+usage afterward, preventing concurrent processes from multiplying the cap.
+Tracking begins prospectively when the ledger is first deployed and resets at
+each UTC month boundary.
 
 ## Test
 
