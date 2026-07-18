@@ -5,6 +5,13 @@ current repository state. Add a new section at the top for runtime,
 deployment-facing, or user-visible bot behavior changes. Test-only and
 docs-only changes do not need entries unless they affect operator workflow.
 
+## Non-Billable OpenAI Availability
+
+- **Idle Cost Fix**: replace the periodic Responses API `Ping` generation with
+  authenticated `GET /v1/models/{model}` metadata checks.
+- **Availability**: keep the existing readiness cache and backend reporting
+  behavior without consuming input, output, or reasoning tokens while idle.
+
 ## Tiered Bot Join Budgets
 
 - **Lobby Policy**: derive bot-vs-bot join probability from

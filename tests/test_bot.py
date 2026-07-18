@@ -750,15 +750,23 @@ class BotTests(unittest.TestCase):
             self.assertTrue(bot.has_own_waiting_game([{"game_code": "ABC123", "created_by": "llm_gptnano"}]))
             self.assertFalse(bot.has_own_waiting_game([{"game_code": "XYZ789", "created_by": "randobot"}]))
 
-    def test_openai_preflight_status_caches_success(self) -> None:
+    def test_openai_preflight_uses_free_model_metadata_and_caches_success(self) -> None:
         response = mock.Mock()
         response.raise_for_status.return_value = None
-        with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False):
-            with mock.patch.object(bot.requests, "post", return_value=response) as post:
-                self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
-                self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
-        self.assertEqual(post.call_count, 1)
-        self.assertGreaterEqual(post.call_args.kwargs["json"]["max_output_tokens"], 16)
+        with mock.patch.dict(
+            "os.environ",
+            {"OPENAI_API_KEY": "test-key", "OPENAI_MODEL": "gpt-5.4-nano"},
+            clear=False,
+        ):
+            with mock.patch.object(bot.requests, "get", return_value=response) as get:
+                with mock.patch.object(bot.requests, "post") as post:
+                    self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
+                    self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
+
+        get.assert_called_once()
+        self.assertTrue(get.call_args.args[0].endswith("/models/gpt-5.4-nano"))
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer test-key")
+        post.assert_not_called()
 
     def test_report_model_availability_posts_status_and_throttles_repeats(self) -> None:
         with mock.patch.object(bot, "post_json", return_value={"ok": True}) as post_json:

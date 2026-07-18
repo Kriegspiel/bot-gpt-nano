@@ -15,7 +15,7 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 - validates the model output against the server-provided legal actions
 - honors explicit server-reported ply caps before asking the model; current
   bot-vs-bot LLM game caps are backend-enforced completed-turn limits
-- checks OpenAI availability with a tiny cached preflight call before joining a new bot-vs-bot game
+- checks OpenAI availability through the non-generating model metadata endpoint before joining a new bot-vs-bot game
 - skips the join if OpenAI is unavailable or out of quota
 - still falls back safely if the model response itself is malformed
 
