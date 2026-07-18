@@ -758,14 +758,78 @@ class BotTests(unittest.TestCase):
             {"OPENAI_API_KEY": "test-key", "OPENAI_MODEL": "gpt-5.4-nano"},
             clear=False,
         ):
-            with mock.patch.object(bot.requests, "get", return_value=response) as get:
-                with mock.patch.object(bot.requests, "post") as post:
-                    self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
-                    self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
+            with mock.patch.object(bot, "openai_monthly_budget_status", return_value=(True, "ok", None)):
+                with mock.patch.object(bot.requests, "get", return_value=response) as get:
+                    with mock.patch.object(bot.requests, "post") as post:
+                        self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
+                        self.assertEqual(bot.openai_preflight_status(), (True, "ok"))
 
         get.assert_called_once()
         self.assertTrue(get.call_args.args[0].endswith("/models/gpt-5.4-nano"))
         self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer test-key")
+        post.assert_not_called()
+
+    def test_openai_preflight_rejects_exhausted_monthly_budget_without_provider_request(self) -> None:
+        with mock.patch.dict(
+            "os.environ",
+            {"OPENAI_API_KEY": "test-key", "OPENAI_MODEL": "gpt-5.4-nano"},
+            clear=False,
+        ):
+            with mock.patch.object(
+                bot,
+                "openai_monthly_budget_status",
+                return_value=(False, "openai_monthly_budget_exhausted", None),
+            ):
+                with mock.patch.object(bot.requests, "get") as get:
+                    self.assertEqual(bot.openai_preflight_status(), (False, "openai_monthly_budget_exhausted"))
+        get.assert_not_called()
+
+    def test_openai_call_settles_shared_monthly_budget_from_usage(self) -> None:
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "id": "resp_1",
+            "usage": {"input_tokens": 1000, "output_tokens": 100},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "openai.json"
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_API_KEY": "test-key",
+                    "OPENAI_MODEL": "gpt-test",
+                    "OPENAI_INPUT_USD_PER_MILLION_TOKENS": "2",
+                    "OPENAI_OUTPUT_USD_PER_MILLION_TOKENS": "10",
+                    "OPENAI_MONTHLY_BUDGET_USD": "18",
+                    "OPENAI_MONTHLY_BUDGET_STATE_PATH": str(state_path),
+                },
+                clear=False,
+            ):
+                with mock.patch.object(bot.requests, "post", return_value=response):
+                    bot.call_openai(system_prompt="system", user_prompt="user")
+                snapshot = bot.openai_monthly_budget_ledger().status()
+
+        self.assertAlmostEqual(snapshot.spent_usd, 0.003)
+        self.assertAlmostEqual(snapshot.reserved_usd, 0)
+
+    def test_openai_call_does_not_run_when_monthly_budget_is_exhausted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_API_KEY": "test-key",
+                    "OPENAI_MODEL": "gpt-test",
+                    "OPENAI_INPUT_USD_PER_MILLION_TOKENS": "2",
+                    "OPENAI_OUTPUT_USD_PER_MILLION_TOKENS": "10",
+                    "OPENAI_MONTHLY_BUDGET_USD": "0",
+                    "OPENAI_MONTHLY_BUDGET_STATE_PATH": str(Path(tmp) / "openai.json"),
+                },
+                clear=False,
+            ):
+                with mock.patch.object(bot, "report_model_availability"):
+                    with mock.patch.object(bot.requests, "post") as post:
+                        with self.assertRaisesRegex(bot.ProviderBudgetExhausted, "openai_monthly_budget_exhausted"):
+                            bot.call_openai(system_prompt="system", user_prompt="user")
         post.assert_not_called()
 
     def test_report_model_availability_posts_status_and_throttles_repeats(self) -> None:
