@@ -23,7 +23,7 @@ Kriegspiel bot that asks an OpenAI model to choose the next action from the bot'
 ## Setup
 
 ```bash
-python3 -m venv .venv
+python3.15 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
@@ -136,3 +136,7 @@ python -m unittest discover -s tests
 ## systemd
 
 A production host can run the bot as a service with `deploy/kriegspiel-gpt-nano-bot.service`.
+
+### Python runtime
+
+Use CPython 3.15.2 (see `.python-version`). Production environments are managed by `ks-deploy python-runtime`; keep the system Python unchanged.
