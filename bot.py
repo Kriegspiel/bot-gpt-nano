@@ -566,7 +566,13 @@ def report_model_usage(payload: dict[str, Any]) -> bool:
     return True
 
 
+def normalize_availability_reason(reason: str) -> str:
+    # Match the backend BotAvailabilityReportRequest.reason contract.
+    return " ".join(reason.split())[:500]
+
+
 def report_model_availability(ready: bool, reason: str, *, force: bool = False) -> bool:
+    reason = normalize_availability_reason(reason)
     now = time.time()
     cached_ready = _MODEL_AVAILABILITY_REPORT_CACHE["ready"]
     cached_reason = str(_MODEL_AVAILABILITY_REPORT_CACHE["reason"])
@@ -1112,7 +1118,7 @@ def cache_openai_preflight(ready: bool, *, reason: str, ttl_seconds: float) -> t
 def describe_http_error(exc: requests.RequestException) -> str:
     response = getattr(exc, "response", None)
     if response is None:
-        return str(exc) or exc.__class__.__name__
+        return normalize_availability_reason(str(exc) or exc.__class__.__name__)
 
     pieces = [f"http_{response.status_code}"]
     try:
@@ -1131,9 +1137,13 @@ def describe_http_error(exc: requests.RequestException) -> str:
         if isinstance(detail, str) and detail:
             pieces.append(detail)
     elif response.text:
-        pieces.append(response.text.strip())
+        if response.text.lstrip().startswith("<"):
+            if response.reason:
+                pieces.append(str(response.reason))
+        else:
+            pieces.append(response.text.strip())
 
-    return ": ".join(dict.fromkeys(piece for piece in pieces if piece))
+    return normalize_availability_reason(": ".join(dict.fromkeys(piece for piece in pieces if piece)))
 
 
 def openai_preflight_status(force: bool = False) -> tuple[bool, str]:
